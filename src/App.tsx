@@ -23,6 +23,7 @@ import {
   Timeframe,
 } from './types/crypto';
 import { BeforeInstallPromptEvent } from './types/pwa';
+import { AlertPreferences, isAlertVoiceStyle } from './types/alerts';
 import { ShieldAlert, Target, AlertOctagon, HelpCircle, ChevronDown, ChevronUp, Settings } from 'lucide-react';
 
 const MAX_COINS = 5;
@@ -30,6 +31,31 @@ const STORAGE_KEY = 'trapdetector_selected_coins_v3';
 const INITIAL_COINS = ['btcusdt', 'ethusdt', 'bnbusdt', 'solusdt', 'xrpusdt'];
 const TIMEFRAMES: Timeframe[] = ['1m', '5m', '1h', '4h'];
 const CANDLE_HISTORY_LIMIT = 120;
+const ALERT_PREFERENCES_KEY = 'trapdetector_alert_preferences_v1';
+const DEFAULT_ALERT_PREFERENCES: AlertPreferences = {
+  browserNotifications: false,
+  voiceAlerts: false,
+  voiceStyle: 'trade',
+};
+
+function readAlertPreferences(): AlertPreferences {
+  try {
+    const saved = localStorage.getItem(ALERT_PREFERENCES_KEY);
+    if (!saved) return DEFAULT_ALERT_PREFERENCES;
+    const parsed: unknown = JSON.parse(saved);
+    if (!parsed || typeof parsed !== 'object') return DEFAULT_ALERT_PREFERENCES;
+    const preferences = parsed as Record<string, unknown>;
+    return {
+      browserNotifications: preferences.browserNotifications === true,
+      voiceAlerts: preferences.voiceAlerts === true,
+      voiceStyle: isAlertVoiceStyle(preferences.voiceStyle)
+          ? preferences.voiceStyle
+          : DEFAULT_ALERT_PREFERENCES.voiceStyle,
+    };
+  } catch {
+    return DEFAULT_ALERT_PREFERENCES;
+  }
+}
 
 function emptyTimeframes(): MultiTimeframeCandles {
   return { '1m': [], '5m': [], '1h': [], '4h': [] };
@@ -91,8 +117,14 @@ export default function App() {
     (navigator as Navigator & { standalone?: boolean }).standalone === true
   );
   const [installError, setInstallError] = useState('');
+  const [alertPreferences, setAlertPreferences] = useState<AlertPreferences>(readAlertPreferences);
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | 'unsupported'>(() =>
+    typeof Notification === 'undefined' ? 'unsupported' : Notification.permission
+  );
+  const [alertSettingsError, setAlertSettingsError] = useState('');
 
   const prevPricesRef = useRef<Record<string, number>>({});
+  const previousSignalTypesRef = useRef<Record<string, TrapAnalysis['signalType']>>({});
   const selectedCoinsRef = useRef<string[]>(selectedCoins);
   const wsRef = useRef<WebSocket | null>(null);
   const priceFlashTimersRef = useRef<Record<string, number>>({});
@@ -150,6 +182,74 @@ export default function App() {
     }
   }, [installPrompt]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem(ALERT_PREFERENCES_KEY, JSON.stringify(alertPreferences));
+    } catch (error) {
+      console.warn('Unable to save notification and sound preferences.', error);
+    }
+  }, [alertPreferences]);
+
+  const toggleBrowserNotifications = useCallback(async () => {
+    setAlertSettingsError('');
+    if (alertPreferences.browserNotifications) {
+      setAlertPreferences((current) => ({ ...current, browserNotifications: false }));
+      return;
+    }
+    if (typeof Notification === 'undefined') {
+      setNotificationPermission('unsupported');
+      setAlertSettingsError('Browser notifications are not supported in this browser.');
+      return;
+    }
+
+    try {
+      const permission = Notification.permission === 'granted'
+        ? 'granted'
+        : await Notification.requestPermission();
+      setNotificationPermission(permission);
+      if (permission === 'granted') {
+        setAlertPreferences((current) => ({ ...current, browserNotifications: true }));
+      } else if (permission === 'denied') {
+        setAlertSettingsError('Notification permission was denied. Enable it in your browser site settings.');
+      } else {
+        setAlertSettingsError('Notifications remain off until browser permission is granted.');
+      }
+    } catch (error) {
+      console.error('Unable to request browser notification permission.', error);
+      setAlertSettingsError('Could not request notification permission. Check your browser settings.');
+    }
+  }, [alertPreferences.browserNotifications]);
+
+  const speakAlert = useCallback((message: string) => {
+    if (!('speechSynthesis' in window)) {
+      setAlertSettingsError('Voice alerts are not supported by this browser.');
+      return;
+    }
+    try {
+      const utterance = new SpeechSynthesisUtterance(message);
+      utterance.lang = 'en-US';
+      utterance.rate = 1.05;
+      utterance.pitch = 1.1;
+      utterance.onerror = (event) => {
+        console.warn('Voice alert could not be played.', event.error);
+      };
+      window.speechSynthesis.speak(utterance);
+    } catch (error) {
+      console.error('Unable to play voice alert.', error);
+      setAlertSettingsError('Voice alert could not be played by this browser.');
+    }
+  }, []);
+
+  const testVoiceAlert = useCallback(() => {
+    setAlertSettingsError('');
+    const phrase = alertPreferences.voiceStyle === 'trade'
+      ? 'Trade trade trade trade trade!'
+      : alertPreferences.voiceStyle === 'paisa'
+        ? 'Paisa paisa paisa!'
+        : 'TrapDetector voice alerts are ready.';
+    speakAlert(phrase);
+  }, [alertPreferences.voiceStyle, speakAlert]);
+
   const analyses = useMemo(() => {
     const nextAnalyses: Record<string, TrapAnalysis> = {};
     for (const symbol of selectedCoins) {
@@ -161,6 +261,61 @@ export default function App() {
     }
     return nextAnalyses;
   }, [candlesMap, selectedCoins, tickersMap]);
+
+  useEffect(() => {
+    for (const symbol of selectedCoins) {
+      const analysis = analyses[symbol];
+      if (!analysis || !isLiveConnected) continue;
+
+      const previousSignal = previousSignalTypesRef.current[symbol];
+      previousSignalTypesRef.current[symbol] = analysis.signalType;
+      if (
+        previousSignal === analysis.signalType ||
+        analysis.signalType === 'NEUTRAL_SCANNING'
+      ) {
+        continue;
+      }
+
+      const actionDescription = analysis.actionType === 'ENTRY'
+        ? 'Potential buy pattern detected.'
+        : 'Risk alert. Avoid chasing this move.';
+      if (alertPreferences.voiceAlerts) {
+        const phrase = alertPreferences.voiceStyle === 'trade'
+          ? 'Trade trade trade trade trade!'
+          : alertPreferences.voiceStyle === 'paisa'
+            ? 'Paisa paisa paisa!'
+            : 'Signal alert.';
+        speakAlert(`${phrase} ${analysis.baseAsset}. ${analysis.headline} ${actionDescription}`);
+      }
+
+      if (
+        alertPreferences.browserNotifications &&
+        typeof Notification !== 'undefined' &&
+        Notification.permission === 'granted'
+      ) {
+        const title = analysis.actionType === 'ENTRY'
+          ? `${analysis.baseAsset}: BUY pattern`
+          : `${analysis.baseAsset}: Trading risk alert`;
+        const body = `${analysis.headline} ${analysis.actionAdvice}`;
+        void (async () => {
+          try {
+            const registration = await navigator.serviceWorker?.getRegistration();
+            if (registration) {
+              await registration.showNotification(title, {
+                body,
+                icon: '/icons/trapdetector-192.svg',
+                tag: `trapdetector-${analysis.symbol}-${analysis.signalType}`,
+              });
+            } else {
+              new Notification(title, { body, icon: '/icons/trapdetector-192.svg' });
+            }
+          } catch (error) {
+            console.error(`Unable to show browser notification for ${analysis.symbol}.`, error);
+          }
+        })();
+      }
+    }
+  }, [alertPreferences, analyses, isLiveConnected, selectedCoins, speakAlert]);
 
   useEffect(() => {
     selectedCoinsRef.current = selectedCoins;
@@ -595,6 +750,18 @@ export default function App() {
           isInstalled={isPwaInstalled}
           installError={installError}
           onInstall={() => void installApplication()}
+          alertPreferences={alertPreferences}
+          notificationPermission={notificationPermission}
+          alertSettingsError={alertSettingsError}
+          onToggleNotifications={() => void toggleBrowserNotifications()}
+          onToggleVoiceAlerts={() => {
+            setAlertSettingsError('');
+            setAlertPreferences((current) => ({ ...current, voiceAlerts: !current.voiceAlerts }));
+          }}
+          onChangeVoiceStyle={(voiceStyle) =>
+            setAlertPreferences((current) => ({ ...current, voiceStyle }))
+          }
+          onTestVoice={testVoiceAlert}
         />
       </div>
     );
@@ -758,6 +925,18 @@ export default function App() {
         isInstalled={isPwaInstalled}
         installError={installError}
         onInstall={() => void installApplication()}
+        alertPreferences={alertPreferences}
+        notificationPermission={notificationPermission}
+        alertSettingsError={alertSettingsError}
+        onToggleNotifications={() => void toggleBrowserNotifications()}
+        onToggleVoiceAlerts={() => {
+          setAlertSettingsError('');
+          setAlertPreferences((current) => ({ ...current, voiceAlerts: !current.voiceAlerts }));
+        }}
+        onChangeVoiceStyle={(voiceStyle) =>
+          setAlertPreferences((current) => ({ ...current, voiceStyle }))
+        }
+        onTestVoice={testVoiceAlert}
       />
     </div>
   );
