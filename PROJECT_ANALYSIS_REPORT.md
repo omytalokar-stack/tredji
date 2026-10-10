@@ -20,7 +20,7 @@ Despite the product name, the trap classifier is not a machine-learning or gener
 - **Frontend entry:** [`src/main.tsx`](./src/main.tsx) mounts [`src/App.tsx`](./src/App.tsx).
 - **Backend entry:** [`server.js`](./server.js).
 - **Development commands:** `npm run dev` starts Vite on port 3000; `npm run start:server` starts Express on port 5000.
-- **Development API forwarding:** [`vite.config.ts`](./vite.config.ts) proxies `/api` to Express on localhost:5000. This is not a production reverse-proxy setup.
+- **Backend API base:** [`src/services/backendApi.ts`](./src/services/backendApi.ts) uses `import.meta.env.VITE_BACKEND_URL` with `https://tredji.onrender.com` as fallback for custom backend routes. The Vite development proxy uses the same configured URL/fallback. This proxy is a development-server feature, not a production reverse-proxy deployment configuration.
 - **Validation:** `npm run lint` runs `tsc --noEmit`; `npm test` runs deterministic rule tests; `npm run build` creates the production frontend bundle.
 
 ## 3. Frontend data pipeline
@@ -82,7 +82,7 @@ The responsive layout uses a centered maximum-width dashboard, mobile bottom nav
 
 [`server.js`](./server.js) reads credentials through dotenv and exits at startup if either `BINANCE_API_KEY` or `BINANCE_API_SECRET` is blank. The local `.env` is gitignored; never copy actual values into source, docs, screenshots, or chat.
 
-`GET /api/account` generates a millisecond timestamp, signs `timestamp=<value>` with HMAC-SHA256 using the server-side secret, calls Binance's signed `/api/v3/account` endpoint with the API key in `X-MBX-APIKEY`, and returns a generic client error when the upstream request fails. The frontend bundle does not receive the API secret. The frontend does not currently call this route.
+`GET /api/account` generates a millisecond timestamp, signs `timestamp=<value>` with HMAC-SHA256 using the server-side secret, calls Binance's signed `/api/v3/account` endpoint with the API key in `X-MBX-APIKEY`, and returns a generic client error when the upstream request fails. The frontend bundle does not receive the API secret. No existing frontend component calls this route; custom backend request URLs should be built with `backendApiUrl` from `src/services/backendApi.ts`. The public market-data service remains separate and continues to call Binance's public API hosts directly.
 
 ### Deployment security items to address
 
