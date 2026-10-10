@@ -13,8 +13,12 @@ if (!process.env.BINANCE_API_KEY?.trim() || !process.env.BINANCE_API_SECRET?.tri
 
 const app = express();
 const port = Number(process.env.PORT) || 5000;
+const allowedOrigins = [
+  'https://trapdetector-ai.vercel.app',
+  'http://localhost:5173',
+];
 
-app.use(cors());
+app.use(cors({ origin: allowedOrigins }));
 app.use(express.json());
 
 function createSignature(queryString) {
