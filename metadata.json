@@ -1,0 +1,6 @@
+{
+  "name": "TrapDetector AI",
+  "description": "Real-time crypto trap detection and smart-money analysis powered by live Binance order flow and volume data.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
