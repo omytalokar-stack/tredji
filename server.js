@@ -3,6 +3,8 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import express from 'express';
 import axios from 'axios';
+import { createServer } from 'node:http';
+import { createMarketWorker } from './backend/marketWorker.js';
 
 dotenv.config();
 
@@ -16,10 +18,18 @@ const port = Number(process.env.PORT) || 5000;
 const allowedOrigins = [
   'https://trapdetector-ai.vercel.app',
   'http://localhost:5173',
+  'http://localhost:3000',
 ];
 
 app.use(cors({ origin: allowedOrigins }));
 app.use(express.json());
+
+const marketWorker = createMarketWorker();
+
+app.get('/api/market-status', (_req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json(marketWorker.getSnapshot());
+});
 
 function createSignature(queryString) {
   return crypto
@@ -50,6 +60,19 @@ app.get('/api/account', async (_req, res) => {
   }
 });
 
-app.listen(port, () => {
+const server = createServer(app);
+
+server.listen(port, () => {
   console.log(`TrapDetector AI proxy listening on port ${port}`);
+  marketWorker.start();
 });
+
+function shutdown(signal) {
+  console.log(`${signal} received; stopping market worker and HTTP server.`);
+  marketWorker.stop();
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(1), 10_000).unref();
+}
+
+process.once('SIGINT', () => shutdown('SIGINT'));
+process.once('SIGTERM', () => shutdown('SIGTERM'));

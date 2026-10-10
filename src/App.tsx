@@ -6,6 +6,7 @@
  */
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { fetchLiveKlines } from './services/binanceApi';
+import { fetchMarketStatus, MarketStatusSnapshot } from './services/marketStatusApi';
 import { analyzeMarketTrap } from './utils/trapEngine';
 import { TopHeader } from './components/TopHeader';
 import { MainTrapCard } from './components/MainTrapCard';
@@ -104,6 +105,9 @@ export default function App() {
   const [allStreamedTickers, setAllStreamedTickers] = useState<BinanceSearchResult[]>([]);
   const [priceFlash, setPriceFlash] = useState<Record<string, 'up' | 'down' | null>>({});
   const [lastStreamTick, setLastStreamTick] = useState<number>(0);
+  const [serverAnalyses, setServerAnalyses] = useState<Record<string, TrapAnalysis>>({});
+  const [marketWorkerStatus, setMarketWorkerStatus] = useState<MarketStatusSnapshot['status'] | 'offline'>('warming_up');
+  const [hasServerMarketData, setHasServerMarketData] = useState(false);
 
   // Modals & Drawers
   const [isSelectedCoinsOpen, setIsSelectedCoinsOpen] = useState(false);
@@ -253,6 +257,11 @@ export default function App() {
   const analyses = useMemo(() => {
     const nextAnalyses: Record<string, TrapAnalysis> = {};
     for (const symbol of selectedCoins) {
+      const serverAnalysis = serverAnalyses[symbol];
+      if (serverAnalysis) {
+        nextAnalyses[symbol] = serverAnalysis;
+        continue;
+      }
       const ticker = tickersMap[symbol];
       const candles = candlesMap[symbol];
       if (!ticker || !candles) continue;
@@ -260,12 +269,77 @@ export default function App() {
       if (analysis) nextAnalyses[symbol] = analysis;
     }
     return nextAnalyses;
-  }, [candlesMap, selectedCoins, tickersMap]);
+  }, [candlesMap, selectedCoins, serverAnalyses, tickersMap]);
+
+  useEffect(() => {
+    let isCancelled = false;
+    let requestInProgress = false;
+    let timer: number | undefined;
+    let activeRequest: AbortController | undefined;
+
+    const pollMarketStatus = async () => {
+      if (requestInProgress || isCancelled) return;
+      requestInProgress = true;
+      activeRequest = new AbortController();
+      try {
+        const snapshot = await fetchMarketStatus(activeRequest.signal);
+        if (isCancelled) return;
+        setMarketWorkerStatus(snapshot.status);
+        setHasServerMarketData(snapshot.symbols.some((item) => item.ticker !== null));
+        if (snapshot.updatedAt) setLastStreamTick(snapshot.updatedAt);
+        const nextAnalyses: Record<string, TrapAnalysis> = {};
+        const nextTickers: Record<string, LiveCoinTicker> = {};
+        const nextCandles: Record<string, MultiTimeframeCandles> = {};
+        for (const item of snapshot.symbols) {
+          if (item.analysis) nextAnalyses[item.symbol] = item.analysis;
+          if (item.ticker) nextTickers[item.symbol] = item.ticker;
+          nextCandles[item.symbol] = item.candles;
+        }
+        setServerAnalyses(nextAnalyses);
+        setTickersMap((previous) => ({ ...previous, ...nextTickers }));
+        setCandlesMap((previous) => {
+          const merged = { ...previous };
+          for (const [symbol, incoming] of Object.entries(nextCandles)) {
+            const existing = merged[symbol] ?? emptyTimeframes();
+            merged[symbol] = {
+              '1m': mergeCandles(existing['1m'], incoming['1m']),
+              '5m': mergeCandles(existing['5m'], incoming['5m']),
+              '1h': mergeCandles(existing['1h'], incoming['1h']),
+              '4h': mergeCandles(existing['4h'], incoming['4h']),
+            };
+          }
+          return merged;
+        });
+      } catch (error) {
+        if (!isCancelled && !(error instanceof DOMException && error.name === 'AbortError')) {
+          setMarketWorkerStatus('offline');
+          console.warn('Unable to fetch backend market status; continuing with available live data.', error);
+        }
+      } finally {
+        requestInProgress = false;
+        if (!isCancelled) timer = window.setTimeout(() => void pollMarketStatus(), 5_000);
+      }
+    };
+
+    const refreshOnFocus = () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+      void pollMarketStatus();
+    };
+    window.addEventListener('focus', refreshOnFocus);
+    void pollMarketStatus();
+
+    return () => {
+      isCancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+      activeRequest?.abort();
+      window.removeEventListener('focus', refreshOnFocus);
+    };
+  }, []);
 
   useEffect(() => {
     for (const symbol of selectedCoins) {
       const analysis = analyses[symbol];
-      if (!analysis || !isLiveConnected) continue;
+      if (!analysis || (!isLiveConnected && !hasServerMarketData)) continue;
 
       const previousSignal = previousSignalTypesRef.current[symbol];
       previousSignalTypesRef.current[symbol] = analysis.signalType;
@@ -315,7 +389,7 @@ export default function App() {
         })();
       }
     }
-  }, [alertPreferences, analyses, isLiveConnected, selectedCoins, speakAlert]);
+  }, [alertPreferences, analyses, hasServerMarketData, isLiveConnected, selectedCoins, speakAlert]);
 
   useEffect(() => {
     selectedCoinsRef.current = selectedCoins;
@@ -731,7 +805,7 @@ export default function App() {
   // =========================================================================
   // 5. Hard UI Blocker: EXACT logic requested by user
   // =========================================================================
-  if (!isLiveConnected) {
+  if (!isLiveConnected && !hasServerMarketData) {
     return (
       <div className="relative h-screen w-screen bg-gray-900 text-red-500 flex flex-col items-center justify-center font-bold text-xl">
         <button
@@ -793,6 +867,16 @@ export default function App() {
             <span>{selectedCoins.length} Coins Monitored</span>
             <span>·</span>
             <span>Last Stream Tick: {new Date(lastStreamTick).toLocaleTimeString()}</span>
+            <span>·</span>
+            <span className={marketWorkerStatus === 'offline' ? 'text-rose-400' : 'text-cyan-300'}>
+              Backend {marketWorkerStatus === 'live'
+                ? 'LIVE'
+                : marketWorkerStatus === 'offline'
+                  ? 'OFFLINE'
+                  : marketWorkerStatus === 'partial'
+                    ? 'PARTIAL'
+                    : 'WARMING'}
+            </span>
           </div>
 
           <div className="flex items-center gap-2 text-xs">

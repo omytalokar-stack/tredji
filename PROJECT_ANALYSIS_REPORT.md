@@ -27,11 +27,17 @@ Despite the product name, the trap classifier is not a machine-learning or gener
 
 `public/manifest.json` defines the app identity, standalone display mode, and dark theme; its cyberpunk SVG app icons are in `public/icons/`. `vite-plugin-pwa` generates and registers a service worker with automatic updates and precaches the built app shell and static assets. It does not cache live Binance API/WebSocket responses or make market data available offline. The Settings modal captures the browser's `beforeinstallprompt` event and presents the install action when supported; installed/standalone sessions hide that action.
 
+### Backend market worker
+
+The Express process starts `backend/marketWorker.js` alongside the HTTP listener. It maintains a server-side watchlist (the five current defaults, or 1-5 Binance USDT symbols supplied through `TRACKED_SYMBOLS`), bootstraps 100 candles for each of `1m`, `5m`, `1h`, and `4h`, and listens to Binance ticker and kline streams for those markets. It calculates the same ten 1m/5m indicator votes, 1h/4h EMA-50 macro consensus, and prioritized trap rules on the backend. The worker retains the latest ticker, candles, analysis, and update/error state in memory; `GET /api/market-status` returns a no-cache snapshot. Higher-timeframe REST refreshes occur hourly and every four hours, while rate-limit responses pause subsequent REST requests.
+
+`App.tsx` polls the endpoint every five seconds and when the page is revisited. For symbols in the server watchlist it prefers the server-calculated analysis; the existing browser feed remains as a compatibility fallback and for the live ticker search. Backend state is process memory and is rebuilt after a Render restart; this is not durable storage. A continuously running Render instance is required for 24/7 collection—sleeping/free instances cannot keep a worker alive while suspended.
+
 ## 3. Frontend data pipeline
 
 ### Startup and tracked markets
 
-The active application and market-data orchestration are in [`src/App.tsx`](./src/App.tsx). Five default markets are BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, and XRPUSDT; a valid stored list in browser localStorage may override defaults. The selected list is limited to five markets.
+The active UI and browser-side fallback market-data orchestration are in [`src/App.tsx`](./src/App.tsx). Five default markets are BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, and XRPUSDT; a valid stored list in browser localStorage may override defaults. The selected list is limited to five markets. When available, the backend watchlist snapshot supplies the preferred analysis for its symbols.
 
 ### Historical candles and rate limits
 
