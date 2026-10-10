@@ -15,13 +15,17 @@ Despite the product name, the trap classifier is not a machine-learning or gener
 
 ## 2. Technology and entry points
 
-- **Frontend:** React, TypeScript, Vite, Tailwind CSS, and lucide-react.
+- **Frontend:** React, TypeScript, Vite, Tailwind CSS, lucide-react, and `vite-plugin-pwa`.
 - **Backend:** Node.js ES modules, Express, Axios, CORS, dotenv, and Node's built-in `crypto`.
 - **Frontend entry:** [`src/main.tsx`](./src/main.tsx) mounts [`src/App.tsx`](./src/App.tsx).
 - **Backend entry:** [`server.js`](./server.js).
 - **Development commands:** `npm run dev` starts Vite on port 3000; `npm run start:server` starts Express on port 5000.
 - **Backend API base:** [`src/services/backendApi.ts`](./src/services/backendApi.ts) uses `import.meta.env.VITE_BACKEND_URL` with `https://tredji.onrender.com` as fallback for custom backend routes. The Vite development proxy uses the same configured URL/fallback. This proxy is a development-server feature, not a production reverse-proxy deployment configuration.
 - **Validation:** `npm run lint` runs `tsc --noEmit`; `npm test` runs deterministic rule tests; `npm run build` creates the production frontend bundle.
+
+### Installable PWA
+
+`public/manifest.json` defines the app identity, standalone display mode, and dark theme; its cyberpunk SVG app icons are in `public/icons/`. `vite-plugin-pwa` generates and registers a service worker with automatic updates and precaches the built app shell and static assets. It does not cache live Binance API/WebSocket responses or make market data available offline. The Settings modal captures the browser's `beforeinstallprompt` event and presents the install action when supported; installed/standalone sessions hide that action.
 
 ## 3. Frontend data pipeline
 

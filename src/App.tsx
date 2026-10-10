@@ -13,6 +13,7 @@ import { CoinsDrawer } from './components/CoinsDrawer';
 import { SelectedCoinsModal } from './components/SelectedCoinsModal';
 import { SearchTickerModal } from './components/SearchTickerModal';
 import { BottomNavBar } from './components/BottomNavBar';
+import { SettingsModal } from './components/SettingsModal';
 import {
   LiveCoinTicker,
   Candle,
@@ -21,7 +22,8 @@ import {
   MultiTimeframeCandles,
   Timeframe,
 } from './types/crypto';
-import { ShieldAlert, Target, AlertOctagon, HelpCircle, ChevronDown, ChevronUp } from 'lucide-react';
+import { BeforeInstallPromptEvent } from './types/pwa';
+import { ShieldAlert, Target, AlertOctagon, HelpCircle, ChevronDown, ChevronUp, Settings } from 'lucide-react';
 
 const MAX_COINS = 5;
 const STORAGE_KEY = 'trapdetector_selected_coins_v3';
@@ -82,6 +84,13 @@ export default function App() {
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isCoinsDrawerOpen, setIsCoinsDrawerOpen] = useState(false);
   const [isGuideOpen, setIsGuideOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
+  const [isPwaInstalled, setIsPwaInstalled] = useState(() =>
+    window.matchMedia('(display-mode: standalone)').matches ||
+    (navigator as Navigator & { standalone?: boolean }).standalone === true
+  );
+  const [installError, setInstallError] = useState('');
 
   const prevPricesRef = useRef<Record<string, number>>({});
   const selectedCoinsRef = useRef<string[]>(selectedCoins);
@@ -96,6 +105,50 @@ export default function App() {
       delete priceFlashTimersRef.current[symbol];
     }, 500);
   }, []);
+
+  useEffect(() => {
+    const handleInstallPrompt = (event: Event) => {
+      event.preventDefault();
+      setInstallPrompt(event as BeforeInstallPromptEvent);
+    };
+    const handleInstalled = () => {
+      setIsPwaInstalled(true);
+      setInstallPrompt(null);
+      setInstallError('');
+    };
+    const standaloneQuery = window.matchMedia('(display-mode: standalone)');
+    const updateStandaloneState = () => {
+      setIsPwaInstalled(
+        standaloneQuery.matches ||
+        (navigator as Navigator & { standalone?: boolean }).standalone === true
+      );
+    };
+
+    window.addEventListener('beforeinstallprompt', handleInstallPrompt);
+    window.addEventListener('appinstalled', handleInstalled);
+    standaloneQuery.addEventListener('change', updateStandaloneState);
+    updateStandaloneState();
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleInstallPrompt);
+      window.removeEventListener('appinstalled', handleInstalled);
+      standaloneQuery.removeEventListener('change', updateStandaloneState);
+    };
+  }, []);
+
+  const installApplication = useCallback(async () => {
+    if (!installPrompt) return;
+    setInstallError('');
+    try {
+      await installPrompt.prompt();
+      const choice = await installPrompt.userChoice;
+      if (choice.outcome === 'accepted') setIsPwaInstalled(true);
+      setInstallPrompt(null);
+    } catch (error) {
+      console.error('Unable to prompt for TrapDetector installation.', error);
+      setInstallError('The browser could not start installation. Please try the browser menu.');
+    }
+  }, [installPrompt]);
 
   const analyses = useMemo(() => {
     const nextAnalyses: Record<string, TrapAnalysis> = {};
@@ -525,8 +578,24 @@ export default function App() {
   // =========================================================================
   if (!isLiveConnected) {
     return (
-      <div className="h-screen w-screen bg-gray-900 text-red-500 flex flex-col items-center justify-center font-bold text-xl">
+      <div className="relative h-screen w-screen bg-gray-900 text-red-500 flex flex-col items-center justify-center font-bold text-xl">
+        <button
+          type="button"
+          onClick={() => setIsSettingsOpen(true)}
+          className="absolute top-4 right-4 w-11 h-11 rounded-xl border border-slate-700 bg-slate-800 text-slate-200 flex items-center justify-center"
+          aria-label="Open settings"
+        >
+          <Settings className="w-5 h-5" />
+        </button>
         {apiError ? apiError : "Waiting for Live Binance WebSocket Data..."}
+        <SettingsModal
+          isOpen={isSettingsOpen}
+          onClose={() => setIsSettingsOpen(false)}
+          installPrompt={installPrompt}
+          isInstalled={isPwaInstalled}
+          installError={installError}
+          onInstall={() => void installApplication()}
+        />
       </div>
     );
   }
@@ -540,6 +609,7 @@ export default function App() {
         maxCoins={MAX_COINS}
         onOpenSelectedCoins={() => setIsSelectedCoinsOpen(true)}
         onOpenSearch={() => setIsSearchOpen(true)}
+        onOpenSettings={() => setIsSettingsOpen(true)}
         isConnected={isLiveConnected}
       />
 
@@ -679,6 +749,15 @@ export default function App() {
         onAddCoin={addCoin}
         onRemoveCoin={removeCoin}
         onReplaceCoin={replaceCoin}
+      />
+
+      <SettingsModal
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        installPrompt={installPrompt}
+        isInstalled={isPwaInstalled}
+        installError={installError}
+        onInstall={() => void installApplication()}
       />
     </div>
   );

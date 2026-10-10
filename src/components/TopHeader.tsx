@@ -3,7 +3,7 @@
  * Contains CuteLogo on top left and Search Box trigger for real Binance tickers
  */
 import React from 'react';
-import { Search, Radio } from 'lucide-react';
+import { Search, Radio, Settings } from 'lucide-react';
 import { CuteLogo } from './CuteLogo';
 
 interface TopHeaderProps {
@@ -11,6 +11,7 @@ interface TopHeaderProps {
   maxCoins: number;
   onOpenSelectedCoins: () => void;
   onOpenSearch: () => void;
+  onOpenSettings: () => void;
   isConnected: boolean;
 }
 
@@ -19,6 +20,7 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
   maxCoins,
   onOpenSelectedCoins,
   onOpenSearch,
+  onOpenSettings,
   isConnected,
 }) => {
   return (
@@ -60,6 +62,15 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
             />
             <span className="hidden md:inline">{isConnected ? 'LIVE' : 'SYNC'}</span>
           </div>
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            className="w-11 h-11 shrink-0 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white flex items-center justify-center transition-all duration-300"
+            aria-label="Open settings"
+            title="Settings"
+          >
+            <Settings className="w-4 h-4" />
+          </button>
         </div>
       </div>
     </header>
