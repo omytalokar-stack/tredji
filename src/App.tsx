@@ -7,6 +7,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { fetchLiveKlines } from './services/binanceApi';
 import { fetchMarketStatus, MarketStatusSnapshot } from './services/marketStatusApi';
+import { subscribeForPush, unsubscribeFromPush } from './services/pushNotifications';
 import { analyzeMarketTrap } from './utils/trapEngine';
 import { TopHeader } from './components/TopHeader';
 import { MainTrapCard } from './components/MainTrapCard';
@@ -122,10 +123,48 @@ export default function App() {
   );
   const [installError, setInstallError] = useState('');
   const [alertPreferences, setAlertPreferences] = useState<AlertPreferences>(readAlertPreferences);
+  const [pushSubscriptionActive, setPushSubscriptionActive] = useState(false);
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | 'unsupported'>(() =>
     typeof Notification === 'undefined' ? 'unsupported' : Notification.permission
   );
   const [alertSettingsError, setAlertSettingsError] = useState('');
+
+  useEffect(() => {
+    let isCancelled = false;
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+      setNotificationPermission('unsupported');
+      return;
+    }
+
+    const initializePushNotifications = async () => {
+      try {
+        const registration = await navigator.serviceWorker.ready;
+        const subscription = await registration.pushManager.getSubscription();
+        if (isCancelled) return;
+        setPushSubscriptionActive(Boolean(subscription));
+
+        if (
+          alertPreferences.browserNotifications &&
+          !subscription &&
+          typeof Notification !== 'undefined' &&
+          Notification.permission === 'granted'
+        ) {
+          await subscribeForPush(registration);
+          if (!isCancelled) setPushSubscriptionActive(true);
+        }
+      } catch (error) {
+        console.error('Unable to initialize background push notifications.', error);
+        if (!isCancelled && alertPreferences.browserNotifications) {
+          setAlertSettingsError('Could not restore push notifications on this device. Try enabling them again in Settings.');
+        }
+      }
+    };
+
+    void initializePushNotifications();
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
 
   const prevPricesRef = useRef<Record<string, number>>({});
   const previousSignalTypesRef = useRef<Record<string, TrapAnalysis['signalType']>>({});
@@ -197,12 +236,27 @@ export default function App() {
   const toggleBrowserNotifications = useCallback(async () => {
     setAlertSettingsError('');
     if (alertPreferences.browserNotifications) {
-      setAlertPreferences((current) => ({ ...current, browserNotifications: false }));
+      try {
+        if ('serviceWorker' in navigator && 'PushManager' in window) {
+          const registration = await navigator.serviceWorker.ready;
+          await unsubscribeFromPush(registration);
+        }
+        setPushSubscriptionActive(false);
+        setAlertPreferences((current) => ({ ...current, browserNotifications: false }));
+      } catch (error) {
+        console.error('Unable to disable push notifications on this device.', error);
+        setAlertSettingsError('Could not disable push notifications. Please try again.');
+      }
       return;
     }
     if (typeof Notification === 'undefined') {
       setNotificationPermission('unsupported');
       setAlertSettingsError('Browser notifications are not supported in this browser.');
+      return;
+    }
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+      setNotificationPermission('unsupported');
+      setAlertSettingsError('Background push notifications are not supported in this browser.');
       return;
     }
 
@@ -212,6 +266,9 @@ export default function App() {
         : await Notification.requestPermission();
       setNotificationPermission(permission);
       if (permission === 'granted') {
+        const registration = await navigator.serviceWorker.ready;
+        await subscribeForPush(registration);
+        setPushSubscriptionActive(true);
         setAlertPreferences((current) => ({ ...current, browserNotifications: true }));
       } else if (permission === 'denied') {
         setAlertSettingsError('Notification permission was denied. Enable it in your browser site settings.');
@@ -220,7 +277,11 @@ export default function App() {
       }
     } catch (error) {
       console.error('Unable to request browser notification permission.', error);
-      setAlertSettingsError('Could not request notification permission. Check your browser settings.');
+      setAlertSettingsError(
+        error instanceof Error
+          ? `Could not enable push notifications: ${error.message}`
+          : 'Could not enable push notifications. Check your browser settings.'
+      );
     }
   }, [alertPreferences.browserNotifications]);
 
@@ -282,7 +343,7 @@ export default function App() {
       requestInProgress = true;
       activeRequest = new AbortController();
       try {
-        const snapshot = await fetchMarketStatus(activeRequest.signal);
+        const snapshot = await fetchMarketStatus(selectedCoins, activeRequest.signal);
         if (isCancelled) return;
         setMarketWorkerStatus(snapshot.status);
         setHasServerMarketData(snapshot.symbols.some((item) => item.ticker !== null));
@@ -334,7 +395,7 @@ export default function App() {
       activeRequest?.abort();
       window.removeEventListener('focus', refreshOnFocus);
     };
-  }, []);
+  }, [selectedCoins]);
 
   useEffect(() => {
     for (const symbol of selectedCoins) {
@@ -826,6 +887,7 @@ export default function App() {
           onInstall={() => void installApplication()}
           alertPreferences={alertPreferences}
           notificationPermission={notificationPermission}
+          pushSubscriptionActive={pushSubscriptionActive}
           alertSettingsError={alertSettingsError}
           onToggleNotifications={() => void toggleBrowserNotifications()}
           onToggleVoiceAlerts={() => {
@@ -1011,6 +1073,7 @@ export default function App() {
         onInstall={() => void installApplication()}
         alertPreferences={alertPreferences}
         notificationPermission={notificationPermission}
+        pushSubscriptionActive={pushSubscriptionActive}
         alertSettingsError={alertSettingsError}
         onToggleNotifications={() => void toggleBrowserNotifications()}
         onToggleVoiceAlerts={() => {

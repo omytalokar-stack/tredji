@@ -12,6 +12,7 @@ interface SettingsModalProps {
   onInstall: () => void;
   alertPreferences: AlertPreferences;
   notificationPermission: NotificationPermission | 'unsupported';
+  pushSubscriptionActive: boolean;
   alertSettingsError: string;
   onToggleNotifications: () => void;
   onToggleVoiceAlerts: () => void;
@@ -28,6 +29,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onInstall,
   alertPreferences,
   notificationPermission,
+  pushSubscriptionActive,
   alertSettingsError,
   onToggleNotifications,
   onToggleVoiceAlerts,
@@ -115,7 +117,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <div>
               <h3 className="font-semibold text-slate-100">Notifications &amp; Sound Alerts</h3>
               <p className="mt-1 text-sm text-slate-400">
-                Alerts are sent only when a coin enters a new MTF signal state.
+                Critical MTF trap alerts are delivered to this device, even when the app is closed.
               </p>
             </div>
           </div>
@@ -123,9 +125,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <div className="mt-4 space-y-3">
             <label className="flex items-center justify-between gap-4 rounded-xl border border-slate-800 px-3 py-3">
               <span>
-                <span className="block text-sm font-medium text-slate-200">Browser notifications</span>
+                <span className="block text-sm font-medium text-slate-200">Background push notifications</span>
                 <span className="mt-0.5 block text-xs text-slate-500">
-                  Permission: {notificationPermission}
+                  Permission: {notificationPermission} · Push: {pushSubscriptionActive ? 'active' : 'inactive'}
                 </span>
               </span>
               <input
@@ -134,7 +136,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 onChange={onToggleNotifications}
                 disabled={notificationPermission === 'unsupported'}
                 className="h-5 w-5 accent-amber-400"
-                aria-label="Enable browser notifications"
+                aria-label="Enable background push notifications"
               />
             </label>
 

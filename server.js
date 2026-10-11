@@ -5,6 +5,7 @@ import express from 'express';
 import axios from 'axios';
 import { createServer } from 'node:http';
 import { createMarketWorker } from './backend/marketWorker.js';
+import { createPushNotifications } from './backend/pushNotifications.js';
 
 dotenv.config();
 
@@ -22,13 +23,86 @@ const allowedOrigins = [
 ];
 
 app.use(cors({ origin: allowedOrigins }));
-app.use(express.json());
+app.use(express.json({ limit: '16kb' }));
 
-const marketWorker = createMarketWorker();
+const pushNotifications = await createPushNotifications();
+if (!pushNotifications.enabled) {
+  console.warn('Web Push is disabled; configure VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, and VAPID_SUBJECT.');
+}
+const marketWorker = createMarketWorker({
+  onSignal: (analysis) => {
+    void pushNotifications.notifySignal(analysis).catch((error) => {
+      console.error(`Unable to send push notifications for ${analysis.symbol}:`, error);
+    });
+  },
+});
 
-app.get('/api/market-status', (_req, res) => {
+app.get('/api/health', (_req, res) => {
   res.set('Cache-Control', 'no-store');
-  res.json(marketWorker.getSnapshot());
+  res.json({
+    ok: true,
+    uptimeSeconds: Math.floor(process.uptime()),
+    marketStatus: marketWorker.getSnapshot().status,
+  });
+});
+
+app.get('/api/market-status', (req, res) => {
+  if (req.query.symbols !== undefined) {
+    if (typeof req.query.symbols !== 'string') {
+      return res.status(400).json({ error: 'Provide tracked symbols as a comma-separated string.' });
+    }
+    try {
+      marketWorker.setSymbols(req.query.symbols.split(','));
+    } catch (error) {
+      if (error instanceof TypeError) {
+        return res.status(400).json({ error: error.message });
+      }
+      console.error('Unable to synchronize the market watchlist:', error);
+      return res.status(500).json({ error: 'Unable to synchronize the market watchlist.' });
+    }
+  }
+  res.set('Cache-Control', 'no-store');
+  return res.json(marketWorker.getSnapshot());
+});
+
+app.get('/api/push/public-key', (_req, res) => {
+  if (!pushNotifications.enabled) {
+    return res.status(503).json({ error: 'Web Push is not configured on this server.' });
+  }
+  res.set('Cache-Control', 'no-store');
+  return res.json({ publicKey: pushNotifications.publicKey });
+});
+
+app.post('/api/push/subscribe', async (req, res) => {
+  if (!pushNotifications.enabled) {
+    return res.status(503).json({ error: 'Web Push is not configured on this server.' });
+  }
+  try {
+    await pushNotifications.addSubscription(req.body);
+    return res.status(201).json({ ok: true });
+  } catch (error) {
+    if (error instanceof TypeError) {
+      return res.status(400).json({ error: error.message });
+    }
+    console.error('Unable to save push subscription:', error);
+    return res.status(500).json({ error: 'Unable to save push subscription.' });
+  }
+});
+
+app.delete('/api/push/subscribe', async (req, res) => {
+  if (!pushNotifications.enabled) {
+    return res.status(503).json({ error: 'Web Push is not configured on this server.' });
+  }
+  try {
+    await pushNotifications.removeSubscription(req.body?.endpoint);
+    return res.json({ ok: true });
+  } catch (error) {
+    if (error instanceof TypeError) {
+      return res.status(400).json({ error: error.message });
+    }
+    console.error('Unable to remove push subscription:', error);
+    return res.status(500).json({ error: 'Unable to remove push subscription.' });
+  }
 });
 
 function createSignature(queryString) {

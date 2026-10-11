@@ -109,8 +109,12 @@ function isMarketStatusSnapshot(value: unknown): value is MarketStatusSnapshot {
     (value.lastError === null || typeof value.lastError === 'string');
 }
 
-export async function fetchMarketStatus(signal?: AbortSignal): Promise<MarketStatusSnapshot> {
-  const response = await fetch(backendApiUrl('/api/market-status'), {
+export async function fetchMarketStatus(
+  symbols: string[],
+  signal?: AbortSignal
+): Promise<MarketStatusSnapshot> {
+  const query = new URLSearchParams({ symbols: symbols.join(',') });
+  const response = await fetch(`${backendApiUrl('/api/market-status')}?${query}`, {
     headers: { Accept: 'application/json' },
     cache: 'no-store',
     signal,

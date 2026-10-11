@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createMarketWorker, makeAnalysis } from './marketWorker.js';
+import { createMarketWorker, createSignalNotifier, makeAnalysis } from './marketWorker.js';
 
 const durations = {
   '1m': 60_000,
@@ -53,6 +53,19 @@ test('worker exposes a warming-up snapshot before history is loaded', () => {
   assert.deepEqual(Object.keys(snapshot.symbols[0].candles), ['1m', '5m', '1h', '4h']);
 });
 
+test('worker syncs its active watchlist, retains shared symbols, and ignores unchanged lists', () => {
+  const worker = createMarketWorker({ symbols: ['BTCUSDT', 'ETHUSDT'] });
+  const initialEthCandles = worker.getSnapshot().symbols[1].candles;
+
+  assert.equal(worker.setSymbols(['ethusdt', 'SOLUSDT']), true);
+  const updatedSymbols = worker.getSnapshot().symbols;
+  assert.deepEqual(updatedSymbols.map(({ symbol }) => symbol), ['ETHUSDT', 'SOLUSDT']);
+  assert.strictEqual(updatedSymbols[0].candles, initialEthCandles);
+  assert.equal(worker.setSymbols(['ETHUSDT', 'SOLUSDT']), false);
+  assert.throws(() => worker.setSymbols([]), /1-5/);
+  assert.throws(() => worker.setSymbols(['BTCUSD']), /1-5/);
+});
+
 test('server engine computes all ten LTF indicator votes and an MTF signal', () => {
   const candles = {
     '1m': makeCandles('1m'),
@@ -76,4 +89,32 @@ test('server engine blocks analysis when any timeframe is short of 100 candles',
     '4h': makeCandles('4h').slice(1),
   };
   assert.equal(makeAnalysis(makeTicker(), candles), null);
+});
+
+test('push notifier sends critical, opportunity and warning signals once per transition', () => {
+  const received = [];
+  const notify = createSignalNotifier((analysis) =>
+    received.push(`${analysis.severity}:${analysis.signalType}`)
+  );
+  const opportunitySignal = {
+    symbol: 'BTCUSDT', severity: 'OPPORTUNITY', signalType: 'STOP_LOSS_HUNT_ENTRY',
+  };
+  const warningSignal = { symbol: 'BTCUSDT', severity: 'WARNING', signalType: 'FAKE_BREAKOUT' };
+  const criticalSignal = { symbol: 'BTCUSDT', severity: 'CRITICAL', signalType: 'RETAIL_TRAP_BHEED' };
+
+  notify(opportunitySignal);
+  notify(opportunitySignal);
+  notify(warningSignal);
+  notify(warningSignal);
+  notify(criticalSignal);
+  notify(criticalSignal);
+  notify({ ...criticalSignal, severity: 'NEUTRAL', signalType: 'NEUTRAL_SCANNING' });
+  notify(criticalSignal);
+
+  assert.deepEqual(received, [
+    'OPPORTUNITY:STOP_LOSS_HUNT_ENTRY',
+    'WARNING:FAKE_BREAKOUT',
+    'CRITICAL:RETAIL_TRAP_BHEED',
+    'CRITICAL:RETAIL_TRAP_BHEED',
+  ]);
 });

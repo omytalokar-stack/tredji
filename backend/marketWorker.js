@@ -29,17 +29,26 @@ let binanceRateLimitUntil = 0;
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 const emptyTimeframes = () => ({ '1m': [], '5m': [], '1h': [], '4h': [] });
 
-function readSymbols(rawSymbols = process.env.TRACKED_SYMBOLS) {
-  if (!rawSymbols?.trim()) return DEFAULT_SYMBOLS;
-  const symbols = [...new Set(rawSymbols.split(',').map((symbol) => symbol.trim().toUpperCase()))];
+export function normalizeSymbols(inputSymbols) {
+  if (!Array.isArray(inputSymbols) || inputSymbols.length < 1 || inputSymbols.length > 5) {
+    throw new TypeError('Tracked symbols must contain 1-5 comma-separated Binance USDT symbols.');
+  }
+  const symbols = [...new Set(inputSymbols.map((symbol) =>
+    typeof symbol === 'string' ? symbol.trim().toUpperCase() : ''
+  ))];
   if (
     symbols.length < 1 ||
     symbols.length > 5 ||
     symbols.some((symbol) => !/^[A-Z0-9]{2,20}USDT$/.test(symbol))
   ) {
-    throw new Error('TRACKED_SYMBOLS must contain 1-5 comma-separated Binance USDT symbols.');
+    throw new TypeError('Tracked symbols must contain 1-5 comma-separated Binance USDT symbols.');
   }
   return symbols;
+}
+
+function readSymbols(rawSymbols = process.env.TRACKED_SYMBOLS) {
+  if (!rawSymbols?.trim()) return DEFAULT_SYMBOLS;
+  return normalizeSymbols(rawSymbols.split(','));
 }
 
 function mergeCandles(existing, incoming) {
@@ -384,11 +393,31 @@ function makeAnalysis(ticker, candles) {
   };
 }
 
-export function createMarketWorker({ symbols = readSymbols(), onStatus = () => {} } = {}) {
-  const market = new Map(symbols.map((symbol) => [
+export function createSignalNotifier(onSignal = () => {}) {
+  const previousPushSignals = new Map();
+  return (analysis) => {
+    const previousSignal = previousPushSignals.get(analysis.symbol);
+    const shouldNotify = ['CRITICAL', 'OPPORTUNITY', 'WARNING'].includes(analysis.severity);
+    const currentSignal = shouldNotify
+      ? `${analysis.severity}:${analysis.signalType}`
+      : null;
+    previousPushSignals.set(analysis.symbol, currentSignal);
+    if (currentSignal && currentSignal !== previousSignal) onSignal(analysis);
+  };
+}
+
+export function createMarketWorker({
+  symbols = readSymbols(),
+  onStatus = () => {},
+  onSignal = () => {},
+} = {}) {
+  let trackedSymbols = normalizeSymbols(symbols);
+  let market = new Map(trackedSymbols.map((symbol) => [
     symbol,
     { ticker: null, candles: emptyTimeframes(), analysis: null, lastUpdated: null, error: null },
   ]));
+  const notifySignal = createSignalNotifier(onSignal);
+  let watchlistGeneration = 0;
   let startedAt = Date.now();
   let lastUpdated = null;
   let lastError = null;
@@ -409,40 +438,49 @@ export function createMarketWorker({ symbols = readSymbols(), onStatus = () => {
     entry.error = null;
     lastUpdated = entry.lastUpdated;
     lastError = null;
+    if (entry.analysis) notifySignal(entry.analysis);
     onStatus();
   };
 
-  const fetchKlines = async (symbol, timeframe) => {
+  const fetchKlines = async (symbol, timeframe, generation = watchlistGeneration) => {
     const path = `/klines?symbol=${encodeURIComponent(symbol)}&interval=${timeframe}&limit=100`;
     const rows = await fetchBinance(path);
+    if (stopped || generation !== watchlistGeneration) return;
     if (!Array.isArray(rows) || rows.length !== 100) {
       throw new Error(`Binance did not return 100 ${timeframe} candles for ${symbol}.`);
     }
     const incoming = rows.map((row) => parseKline(row));
     const entry = market.get(symbol);
+    if (!entry) return;
     entry.candles[timeframe] = mergeCandles(entry.candles[timeframe], incoming);
     if (entry.ticker) publishUpdate(entry);
   };
 
   const bootstrap = async () => {
-    for (const symbol of symbols) {
-      if (stopped) return;
+    const generation = watchlistGeneration;
+    const symbolsToBootstrap = [...trackedSymbols];
+    for (const symbol of symbolsToBootstrap) {
+      if (stopped || generation !== watchlistGeneration) return;
       for (const timeframe of TIMEFRAMES) {
-        if (stopped) return;
+        if (stopped || generation !== watchlistGeneration) return;
         try {
-          await fetchKlines(symbol, timeframe);
+          await fetchKlines(symbol, timeframe, generation);
         } catch (error) {
+          if (generation !== watchlistGeneration) return;
           const entry = market.get(symbol);
+          if (!entry) return;
           entry.error = error.message;
           lastError = error.message;
           console.error(`Market bootstrap failed for ${symbol} ${timeframe}:`, error.message);
         }
         await delay(150);
       }
-      if (stopped) return;
+      if (stopped || generation !== watchlistGeneration) return;
       try {
         const data = await fetchBinance(`/ticker/24hr?symbol=${encodeURIComponent(symbol)}`);
+        if (stopped || generation !== watchlistGeneration) return;
         const entry = market.get(symbol);
+        if (!entry) return;
         entry.ticker = {
           symbol,
           baseAsset: symbol.replace(/USDT$/, ''),
@@ -457,14 +495,16 @@ export function createMarketWorker({ symbols = readSymbols(), onStatus = () => {
         };
         publishUpdate(entry);
       } catch (error) {
+        if (generation !== watchlistGeneration) return;
         const entry = market.get(symbol);
+        if (!entry) return;
         entry.error = error.message;
         lastError = error.message;
         console.error(`Ticker bootstrap failed for ${symbol}:`, error.message);
       }
       await delay(150);
     }
-    onStatus();
+    if (generation === watchlistGeneration) onStatus();
   };
 
   const scheduleReconnect = () => {
@@ -482,7 +522,7 @@ export function createMarketWorker({ symbols = readSymbols(), onStatus = () => {
 
   function connect() {
     if (stopped || socket) return;
-    const streams = symbols.flatMap((symbol) => [
+    const streams = trackedSymbols.flatMap((symbol) => [
       `${symbol.toLowerCase()}@ticker`,
       ...TIMEFRAMES.map((timeframe) => `${symbol.toLowerCase()}@kline_${timeframe}`),
     ]).join('/');
@@ -495,7 +535,7 @@ export function createMarketWorker({ symbols = readSymbols(), onStatus = () => {
         reconnectAttempt = 0;
         lastError = null;
         onStatus();
-        console.info(`Binance market worker connected for ${symbols.join(', ')}.`);
+        console.info(`Binance market worker connected for ${trackedSymbols.join(', ')}.`);
       });
       currentSocket.on('message', (raw) => {
         if (stopped || socket !== currentSocket) return;
@@ -570,14 +610,17 @@ export function createMarketWorker({ symbols = readSymbols(), onStatus = () => {
   const refreshTimeframe = async (timeframe) => {
     if (refreshInProgress || stopped) return;
     refreshInProgress = true;
+    const generation = watchlistGeneration;
     try {
-      for (const symbol of symbols) {
-        if (stopped) return;
+      for (const symbol of [...trackedSymbols]) {
+        if (stopped || generation !== watchlistGeneration) return;
         try {
-          await fetchKlines(symbol, timeframe);
+          await fetchKlines(symbol, timeframe, generation);
           await delay(150);
         } catch (error) {
+          if (generation !== watchlistGeneration) return;
           const entry = market.get(symbol);
+          if (!entry) continue;
           entry.error = error.message;
           lastError = error.message;
           console.error(`Scheduled ${timeframe} refresh failed for ${symbol}:`, error.message);
@@ -590,7 +633,7 @@ export function createMarketWorker({ symbols = readSymbols(), onStatus = () => {
   };
 
   function getSnapshot() {
-    const symbolsState = symbols.map((symbol) => {
+    const symbolsState = trackedSymbols.map((symbol) => {
       const entry = market.get(symbol);
       return {
         symbol,
@@ -603,7 +646,7 @@ export function createMarketWorker({ symbols = readSymbols(), onStatus = () => {
     });
     const readySymbols = symbolsState.filter((item) => item.analysis !== null).length;
     return {
-      status: readySymbols === symbols.length && streamConnected
+      status: readySymbols === trackedSymbols.length && streamConnected
         ? 'live'
         : readySymbols > 0
           ? 'partial'
@@ -644,7 +687,49 @@ export function createMarketWorker({ symbols = readSymbols(), onStatus = () => {
     }
   }
 
-  return { start, stop, getSnapshot };
+  function setSymbols(nextSymbols) {
+    const normalizedSymbols = normalizeSymbols(nextSymbols);
+    if (
+      normalizedSymbols.length === trackedSymbols.length &&
+      normalizedSymbols.every((symbol, index) => symbol === trackedSymbols[index])
+    ) {
+      return false;
+    }
+
+    trackedSymbols = normalizedSymbols;
+    watchlistGeneration += 1;
+    market = new Map(trackedSymbols.map((symbol) => [
+      symbol,
+      market.get(symbol) ?? {
+        ticker: null,
+        candles: emptyTimeframes(),
+        analysis: null,
+        lastUpdated: null,
+        error: null,
+      },
+    ]));
+    streamConnected = false;
+    reconnectAttempt = 0;
+
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+
+    const currentSocket = socket;
+    socket = null;
+    if (currentSocket) {
+      currentSocket.removeAllListeners();
+      currentSocket.close();
+    }
+
+    if (started && !stopped) {
+      connect();
+      void bootstrap();
+    }
+    onStatus();
+    return true;
+  }
+
+  return { start, stop, getSnapshot, setSymbols };
 }
 
 export { makeAnalysis, readSymbols };

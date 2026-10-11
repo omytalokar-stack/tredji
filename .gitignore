@@ -7,5 +7,7 @@ coverage/
 .env*
 !.env.example
 apis.txt
+/data/push-subscriptions.json
+/data/push-subscriptions.json.*.tmp
 
 .vercel
