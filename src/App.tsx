@@ -124,6 +124,7 @@ export default function App() {
   const [installError, setInstallError] = useState('');
   const [alertPreferences, setAlertPreferences] = useState<AlertPreferences>(readAlertPreferences);
   const [pushSubscriptionActive, setPushSubscriptionActive] = useState(false);
+  const [pushSetupLoading, setPushSetupLoading] = useState(true);
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | 'unsupported'>(() =>
     typeof Notification === 'undefined' ? 'unsupported' : Notification.permission
   );
@@ -133,29 +134,51 @@ export default function App() {
     let isCancelled = false;
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
       setNotificationPermission('unsupported');
+      setPushSetupLoading(false);
       return;
     }
 
     const initializePushNotifications = async () => {
       try {
+        if (typeof Notification !== 'undefined') {
+          setNotificationPermission(Notification.permission);
+        }
         const registration = await navigator.serviceWorker.ready;
         const subscription = await registration.pushManager.getSubscription();
         if (isCancelled) return;
         setPushSubscriptionActive(Boolean(subscription));
 
-        if (
+        if (subscription) {
+          if (!isCancelled) {
+            setAlertPreferences((current) => ({ ...current, browserNotifications: true }));
+          }
+        } else if (
           alertPreferences.browserNotifications &&
-          !subscription &&
           typeof Notification !== 'undefined' &&
           Notification.permission === 'granted'
         ) {
           await subscribeForPush(registration);
-          if (!isCancelled) setPushSubscriptionActive(true);
+          if (!isCancelled) {
+            setPushSubscriptionActive(true);
+            setAlertPreferences((current) => ({ ...current, browserNotifications: true }));
+          }
+        } else if (!isCancelled) {
+          setAlertPreferences((current) => ({ ...current, browserNotifications: false }));
         }
       } catch (error) {
         console.error('Unable to initialize background push notifications.', error);
-        if (!isCancelled && alertPreferences.browserNotifications) {
-          setAlertSettingsError('Could not restore push notifications on this device. Try enabling them again in Settings.');
+        if (!isCancelled) {
+          setPushSubscriptionActive(false);
+          setAlertPreferences((current) => ({ ...current, browserNotifications: false }));
+          setAlertSettingsError(
+            error instanceof Error
+              ? `Could not restore push notifications: ${error.message}`
+              : 'Could not restore push notifications on this device. Try enabling them again in Settings.'
+          );
+        }
+      } finally {
+        if (!isCancelled) {
+          setPushSetupLoading(false);
         }
       }
     };
@@ -235,7 +258,8 @@ export default function App() {
 
   const toggleBrowserNotifications = useCallback(async () => {
     setAlertSettingsError('');
-    if (alertPreferences.browserNotifications) {
+    setPushSetupLoading(true);
+    if (pushSubscriptionActive) {
       try {
         if ('serviceWorker' in navigator && 'PushManager' in window) {
           const registration = await navigator.serviceWorker.ready;
@@ -245,18 +269,26 @@ export default function App() {
         setAlertPreferences((current) => ({ ...current, browserNotifications: false }));
       } catch (error) {
         console.error('Unable to disable push notifications on this device.', error);
-        setAlertSettingsError('Could not disable push notifications. Please try again.');
+        setAlertSettingsError(
+          error instanceof Error
+            ? `Could not disable push notifications: ${error.message}`
+            : 'Could not disable push notifications. Please try again.'
+        );
+      } finally {
+        setPushSetupLoading(false);
       }
       return;
     }
     if (typeof Notification === 'undefined') {
       setNotificationPermission('unsupported');
       setAlertSettingsError('Browser notifications are not supported in this browser.');
+      setPushSetupLoading(false);
       return;
     }
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
       setNotificationPermission('unsupported');
       setAlertSettingsError('Background push notifications are not supported in this browser.');
+      setPushSetupLoading(false);
       return;
     }
 
@@ -282,8 +314,10 @@ export default function App() {
           ? `Could not enable push notifications: ${error.message}`
           : 'Could not enable push notifications. Check your browser settings.'
       );
+    } finally {
+      setPushSetupLoading(false);
     }
-  }, [alertPreferences.browserNotifications]);
+  }, [pushSubscriptionActive]);
 
   const speakAlert = useCallback((message: string) => {
     if (!('speechSynthesis' in window)) {
@@ -438,11 +472,11 @@ export default function App() {
             if (registration) {
               await registration.showNotification(title, {
                 body,
-                icon: '/icons/trapdetector-192.svg',
+                icon: '/icon-192.png',
                 tag: `trapdetector-${analysis.symbol}-${analysis.signalType}`,
               });
             } else {
-              new Notification(title, { body, icon: '/icons/trapdetector-192.svg' });
+              new Notification(title, { body, icon: '/icon-192.png' });
             }
           } catch (error) {
             console.error(`Unable to show browser notification for ${analysis.symbol}.`, error);
@@ -888,6 +922,7 @@ export default function App() {
           alertPreferences={alertPreferences}
           notificationPermission={notificationPermission}
           pushSubscriptionActive={pushSubscriptionActive}
+          pushSetupLoading={pushSetupLoading}
           alertSettingsError={alertSettingsError}
           onToggleNotifications={() => void toggleBrowserNotifications()}
           onToggleVoiceAlerts={() => {
@@ -1074,6 +1109,7 @@ export default function App() {
         alertPreferences={alertPreferences}
         notificationPermission={notificationPermission}
         pushSubscriptionActive={pushSubscriptionActive}
+        pushSetupLoading={pushSetupLoading}
         alertSettingsError={alertSettingsError}
         onToggleNotifications={() => void toggleBrowserNotifications()}
         onToggleVoiceAlerts={() => {

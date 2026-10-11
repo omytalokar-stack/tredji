@@ -13,9 +13,15 @@ async function responseError(response: Response, fallback: string): Promise<Erro
 }
 
 function decodeVapidKey(value: string): ArrayBuffer {
+  if (!/^[A-Za-z0-9_-]+$/.test(value)) {
+    throw new Error('The push server returned an invalid VAPID public key.');
+  }
   const padded = value + '='.repeat((4 - (value.length % 4)) % 4);
   const decoded = window.atob(padded.replace(/-/g, '+').replace(/_/g, '/'));
   const bytes = Uint8Array.from(decoded, (character) => character.charCodeAt(0));
+  if (bytes.byteLength !== 65 || bytes[0] !== 4) {
+    throw new Error('The push server returned an invalid VAPID public key.');
+  }
   const key = new ArrayBuffer(bytes.byteLength);
   new Uint8Array(key).set(bytes);
   return key;

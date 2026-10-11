@@ -13,6 +13,7 @@ interface SettingsModalProps {
   alertPreferences: AlertPreferences;
   notificationPermission: NotificationPermission | 'unsupported';
   pushSubscriptionActive: boolean;
+  pushSetupLoading: boolean;
   alertSettingsError: string;
   onToggleNotifications: () => void;
   onToggleVoiceAlerts: () => void;
@@ -30,6 +31,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   alertPreferences,
   notificationPermission,
   pushSubscriptionActive,
+  pushSetupLoading,
   alertSettingsError,
   onToggleNotifications,
   onToggleVoiceAlerts,
@@ -127,16 +129,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <span>
                 <span className="block text-sm font-medium text-slate-200">Background push notifications</span>
                 <span className="mt-0.5 block text-xs text-slate-500">
-                  Permission: {notificationPermission} · Push: {pushSubscriptionActive ? 'active' : 'inactive'}
+                  Permission: {notificationPermission} · Push: {pushSetupLoading ? 'checking' : pushSubscriptionActive ? 'active' : 'inactive'}
                 </span>
               </span>
               <input
                 type="checkbox"
-                checked={alertPreferences.browserNotifications}
+                checked={pushSubscriptionActive}
                 onChange={onToggleNotifications}
-                disabled={notificationPermission === 'unsupported'}
+                disabled={pushSetupLoading || notificationPermission === 'unsupported'}
                 className="h-5 w-5 accent-amber-400"
                 aria-label="Enable background push notifications"
+                aria-busy={pushSetupLoading}
               />
             </label>
 

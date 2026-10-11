@@ -15,8 +15,8 @@ self.addEventListener('push', (event) => {
   const title = typeof payload.title === 'string' ? payload.title : 'TrapDetector AI alert';
   const options = {
     body: typeof payload.body === 'string' ? payload.body : 'A critical MTF trap signal was detected.',
-    icon: '/icons/trapdetector-192.svg',
-    badge: '/icons/trapdetector-192.svg',
+    icon: '/icon-192.png',
+    badge: '/icon-192.png',
     tag: typeof payload.tag === 'string' ? payload.tag : 'trapdetector-alert',
     data: { url: typeof payload.url === 'string' ? payload.url : '/' },
   };
