@@ -11,6 +11,7 @@ const ALLOWED_PUSH_HOSTS = [
   'web.push.apple.com',
   'notify.windows.com',
 ];
+const DEFAULT_VAPID_SUBJECT = 'https://trapdetector-ai.vercel.app';
 
 function isAllowedPushEndpoint(endpoint) {
   if (typeof endpoint !== 'string' || endpoint.length > 2048) return false;
@@ -81,10 +82,9 @@ export async function createPushNotifications({
     throw new Error('Set both VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY, or leave both unset.');
   }
   const enabled = Boolean(publicKey && privateKey);
-  if (enabled && !subject) {
-    throw new Error('VAPID_SUBJECT must be set when VAPID keys are configured.');
+  if (enabled) {
+    push.setVapidDetails(subject?.trim() || DEFAULT_VAPID_SUBJECT, publicKey, privateKey);
   }
-  if (enabled) push.setVapidDetails(subject, publicKey, privateKey);
 
   await mkdir(path.dirname(storagePath), { recursive: true });
   let subscriptions = new Map();

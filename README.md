@@ -11,9 +11,9 @@ proxy endpoint rather than access Binance account endpoints directly.
 2. Add your Binance API key and secret to `.env`. Keep `.env` private and do
    not commit it.
 3. Generate a VAPID key pair with `npx web-push generate-vapid-keys` and add
-   the public key, private key, and a contact address (`VAPID_SUBJECT`) to the
-   backend `.env`. Keep the private key secret and use the same key pair for
-   every backend instance.
+   the public key and private key to the backend `.env`. Optionally set
+   `VAPID_SUBJECT` to a contact address; it defaults to the app URL. Keep the
+   private key secret and use the same key pair for every backend instance.
 4. Start the backend proxy and market worker with `npm run start:server`
    (listens on port 5000).
 5. In another terminal, start the frontend with `npm run dev`.
@@ -51,8 +51,8 @@ connected to Binance.
 
 ## Web Push deployment
 
-Configure `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, and `VAPID_SUBJECT` in the
-backend environment only. The public key is exposed to the app by
+Configure `VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY` in the backend environment
+only. `VAPID_SUBJECT` is optional and defaults to the app URL. The public key is exposed to the app by
 `GET /api/push/public-key`; never place the private key in a `VITE_` variable.
 The app registers the push-capable service worker and manages device
 subscriptions through `POST /api/push/subscribe` and

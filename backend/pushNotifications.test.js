@@ -158,3 +158,19 @@ test('VAPID keys must be configured as a pair', async () => {
     /Set both VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY/
   );
 });
+
+test('VAPID subject defaults to the application URL when unset', async () => {
+  await withTemporaryStorage(async (storagePath) => {
+    const push = makePush();
+    const service = await createPushNotifications({
+      publicKey: 'public-key',
+      privateKey: 'private-key',
+      subject: '',
+      storagePath,
+      push,
+    });
+
+    assert.equal(service.enabled, true);
+    assert.equal(push.vapidDetails.subject, 'https://trapdetector-ai.vercel.app');
+  });
+});
