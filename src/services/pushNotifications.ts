@@ -28,29 +28,13 @@ function decodeVapidKey(value: string): ArrayBuffer {
 }
 
 export async function subscribeForPush(
-  registration: ServiceWorkerRegistration
+  registration: ServiceWorkerRegistration,
+  publicKey: string
 ): Promise<PushSubscription> {
-  const keyResponse = await fetch(backendApiUrl('/api/push/public-key'), {
-    headers: { Accept: 'application/json' },
-    cache: 'no-store',
-  });
-  if (!keyResponse.ok) throw await responseError(keyResponse, 'Unable to load the push server key');
-
-  const keyBody: unknown = await keyResponse.json();
-  if (
-    typeof keyBody !== 'object' ||
-    keyBody === null ||
-    !('publicKey' in keyBody) ||
-    typeof keyBody.publicKey !== 'string' ||
-    !keyBody.publicKey
-  ) {
-    throw new Error('The push server returned an invalid public key.');
-  }
-
   const existingSubscription = await registration.pushManager.getSubscription();
   const subscription = existingSubscription ?? await registration.pushManager.subscribe({
     userVisibleOnly: true,
-    applicationServerKey: decodeVapidKey(keyBody.publicKey),
+    applicationServerKey: decodeVapidKey(publicKey),
   });
 
   try {
@@ -66,6 +50,28 @@ export async function subscribeForPush(
   }
 
   return subscription;
+}
+
+export async function fetchPushPublicKey(): Promise<string> {
+  const response = await fetch(backendApiUrl('/api/push/public-key'), {
+    headers: { Accept: 'application/json' },
+    cache: 'no-store',
+  });
+  if (!response.ok) throw await responseError(response, 'Unable to load the push server key');
+
+  const keyBody: unknown = await response.json();
+  if (
+    typeof keyBody !== 'object' ||
+    keyBody === null ||
+    !('publicKey' in keyBody) ||
+    typeof keyBody.publicKey !== 'string' ||
+    !keyBody.publicKey
+  ) {
+    throw new Error('The push server returned an invalid public key.');
+  }
+
+  decodeVapidKey(keyBody.publicKey);
+  return keyBody.publicKey;
 }
 
 export async function unsubscribeFromPush(

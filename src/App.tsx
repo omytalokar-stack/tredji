@@ -7,7 +7,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { fetchLiveKlines } from './services/binanceApi';
 import { fetchMarketStatus, MarketStatusSnapshot } from './services/marketStatusApi';
-import { subscribeForPush, unsubscribeFromPush } from './services/pushNotifications';
+import { fetchPushPublicKey, subscribeForPush, unsubscribeFromPush } from './services/pushNotifications';
 import { analyzeMarketTrap } from './utils/trapEngine';
 import { TopHeader } from './components/TopHeader';
 import { MainTrapCard } from './components/MainTrapCard';
@@ -157,7 +157,8 @@ export default function App() {
           typeof Notification !== 'undefined' &&
           Notification.permission === 'granted'
         ) {
-          await subscribeForPush(registration);
+          const publicKey = await fetchPushPublicKey();
+          await subscribeForPush(registration, publicKey);
           if (!isCancelled) {
             setPushSubscriptionActive(true);
             setAlertPreferences((current) => ({ ...current, browserNotifications: true }));
@@ -293,13 +294,14 @@ export default function App() {
     }
 
     try {
+      const publicKey = await fetchPushPublicKey();
       const permission = Notification.permission === 'granted'
         ? 'granted'
         : await Notification.requestPermission();
       setNotificationPermission(permission);
       if (permission === 'granted') {
         const registration = await navigator.serviceWorker.ready;
-        await subscribeForPush(registration);
+        await subscribeForPush(registration, publicKey);
         setPushSubscriptionActive(true);
         setAlertPreferences((current) => ({ ...current, browserNotifications: true }));
       } else if (permission === 'denied') {
