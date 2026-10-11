@@ -78,12 +78,19 @@ export async function createPushNotifications({
   storagePath = path.resolve(process.env.PUSH_SUBSCRIPTIONS_FILE || 'data/push-subscriptions.json'),
   push = webPush,
 } = {}) {
+  let enabled = Boolean(publicKey && privateKey);
+  let configurationError = null;
   if (Boolean(publicKey) !== Boolean(privateKey)) {
-    throw new Error('Set both VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY, or leave both unset.');
+    enabled = false;
+    configurationError = 'Set both VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY to enable Web Push.';
   }
-  const enabled = Boolean(publicKey && privateKey);
   if (enabled) {
-    push.setVapidDetails(subject?.trim() || DEFAULT_VAPID_SUBJECT, publicKey, privateKey);
+    try {
+      push.setVapidDetails(subject?.trim() || DEFAULT_VAPID_SUBJECT, publicKey, privateKey);
+    } catch (error) {
+      enabled = false;
+      configurationError = `The configured VAPID keys are invalid: ${error.message} Generate a valid VAPID key pair and update both backend environment variables.`;
+    }
   }
 
   await mkdir(path.dirname(storagePath), { recursive: true });
@@ -172,6 +179,7 @@ export async function createPushNotifications({
   return {
     enabled,
     publicKey: enabled ? publicKey : null,
+    configurationError,
     addSubscription,
     removeSubscription,
     notifySignal,

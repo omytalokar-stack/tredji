@@ -152,11 +152,38 @@ test('critical, opportunity and warning signals all send push notifications', as
   });
 });
 
-test('VAPID keys must be configured as a pair', async () => {
-  await assert.rejects(
-    createPushNotifications({ publicKey: 'public-key', privateKey: '', subject: 'mailto:alerts@example.com' }),
-    /Set both VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY/
-  );
+test('incomplete VAPID configuration disables push without crashing startup', async () => {
+  await withTemporaryStorage(async (storagePath) => {
+    const service = await createPushNotifications({
+      publicKey: 'public-key',
+      privateKey: '',
+      subject: 'mailto:alerts@example.com',
+      storagePath,
+      push: makePush(),
+    });
+
+    assert.equal(service.enabled, false);
+    assert.match(service.configurationError, /Set both VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY/);
+  });
+});
+
+test('invalid VAPID keys disable push without crashing startup', async () => {
+  await withTemporaryStorage(async (storagePath) => {
+    const push = makePush();
+    push.setVapidDetails = () => {
+      throw new Error('Vapid public key should be 65 bytes long when decoded.');
+    };
+    const service = await createPushNotifications({
+      publicKey: 'invalid-public-key',
+      privateKey: 'invalid-private-key',
+      storagePath,
+      push,
+    });
+
+    assert.equal(service.enabled, false);
+    assert.match(service.configurationError, /Vapid public key should be 65 bytes long/);
+    assert.match(service.configurationError, /Generate a valid VAPID key pair/);
+  });
 });
 
 test('VAPID subject defaults to the application URL when unset', async () => {

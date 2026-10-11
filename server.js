@@ -27,7 +27,9 @@ app.use(express.json({ limit: '16kb' }));
 
 const pushNotifications = await createPushNotifications();
 if (!pushNotifications.enabled) {
-  console.warn('Web Push is disabled; configure VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, and VAPID_SUBJECT.');
+  console.warn(
+    `Web Push is disabled. ${pushNotifications.configurationError || 'Configure VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY.'}`
+  );
 }
 const marketWorker = createMarketWorker({
   onSignal: (analysis) => {
@@ -67,7 +69,9 @@ app.get('/api/market-status', (req, res) => {
 
 app.get('/api/push/public-key', (_req, res) => {
   if (!pushNotifications.enabled) {
-    return res.status(503).json({ error: 'Web Push is not configured on this server.' });
+    return res.status(503).json({
+      error: pushNotifications.configurationError || 'Web Push is not configured on this server.',
+    });
   }
   res.set('Cache-Control', 'no-store');
   return res.json({ publicKey: pushNotifications.publicKey });
@@ -75,7 +79,9 @@ app.get('/api/push/public-key', (_req, res) => {
 
 app.post('/api/push/subscribe', async (req, res) => {
   if (!pushNotifications.enabled) {
-    return res.status(503).json({ error: 'Web Push is not configured on this server.' });
+    return res.status(503).json({
+      error: pushNotifications.configurationError || 'Web Push is not configured on this server.',
+    });
   }
   try {
     await pushNotifications.addSubscription(req.body);
@@ -91,7 +97,9 @@ app.post('/api/push/subscribe', async (req, res) => {
 
 app.delete('/api/push/subscribe', async (req, res) => {
   if (!pushNotifications.enabled) {
-    return res.status(503).json({ error: 'Web Push is not configured on this server.' });
+    return res.status(503).json({
+      error: pushNotifications.configurationError || 'Web Push is not configured on this server.',
+    });
   }
   try {
     await pushNotifications.removeSubscription(req.body?.endpoint);
