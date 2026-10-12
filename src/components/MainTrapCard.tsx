@@ -25,6 +25,7 @@ interface MainTrapCardProps {
   onSelectCoin: (symbol: string) => void;
   priceFlash: 'up' | 'down' | null;
   isTopRanked?: boolean;
+  onBookTrade?: (analysis: TrapAnalysis) => void;
 }
 
 export const MainTrapCard: React.FC<MainTrapCardProps> = ({
@@ -34,6 +35,7 @@ export const MainTrapCard: React.FC<MainTrapCardProps> = ({
   activeSymbol,
   onSelectCoin,
   priceFlash,
+  onBookTrade,
 }) => {
   if (!analysis) {
     return (
@@ -70,10 +72,10 @@ export const MainTrapCard: React.FC<MainTrapCardProps> = ({
   // Format price neatly based on magnitude
   const formatPrice = (val: number) => {
     if (val >= 1000) {
-      return val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      return val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 8 });
     }
     if (val >= 1) {
-      return val.toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 });
+      return val.toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 8 });
     }
     return val.toLocaleString('en-US', { minimumFractionDigits: 6, maximumFractionDigits: 8 });
   };
@@ -178,6 +180,19 @@ export const MainTrapCard: React.FC<MainTrapCardProps> = ({
                 {analysis.severity}
               </span>
             </div>
+            {typeof analysis.suggestedSL === 'number' &&
+              typeof analysis.suggestedTarget === 'number' && (
+                <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-right font-mono">
+                  <span className="text-[10px] uppercase text-rose-300">Stop-Loss</span>
+                  <span className="text-[10px] uppercase text-emerald-300">Target · 1:2</span>
+                  <span className="text-xs font-bold tabular-nums text-rose-200">
+                    ${formatPrice(analysis.suggestedSL)}
+                  </span>
+                  <span className="text-xs font-bold tabular-nums text-emerald-200">
+                    ${formatPrice(analysis.suggestedTarget)}
+                  </span>
+                </div>
+              )}
           </div>
         </div>
 
@@ -285,6 +300,15 @@ export const MainTrapCard: React.FC<MainTrapCardProps> = ({
             <p className="text-sm sm:text-base font-bold text-slate-100 mt-0.5 leading-snug">
               {analysis.actionAdvice}
             </p>
+            {(isBheedTrap || isStopLossHunt) && onBookTrade && (
+              <button
+                type="button"
+                onClick={() => onBookTrade(analysis)}
+                className="mt-3 min-h-11 rounded-xl bg-cyan-400 px-4 py-2 text-sm font-bold text-slate-950 transition-colors hover:bg-cyan-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-200"
+              >
+                Book Trade
+              </button>
+            )}
           </div>
         </div>
 

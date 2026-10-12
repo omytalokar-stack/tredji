@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import test from 'node:test';
+import { ATR } from 'technicalindicators';
 import { createMarketWorker, createSignalNotifier, makeAnalysis } from './marketWorker.js';
 
 const durations = {
@@ -43,6 +45,33 @@ function makeTicker() {
   };
 }
 
+function makeBinanceRows(timeframe) {
+  return makeCandles(timeframe).map((candle) => [
+    candle.openTime,
+    String(candle.open),
+    String(candle.high),
+    String(candle.low),
+    String(candle.close),
+    String(candle.volume),
+    candle.closeTime,
+    String(candle.quoteVolume),
+    0,
+    String(candle.takerBuyVolume),
+  ]);
+}
+
+class FakeWebSocket extends EventEmitter {
+  close() {}
+}
+
+async function waitFor(predicate, timeoutMs = 1_000) {
+  const startedAt = Date.now();
+  while (!predicate()) {
+    if (Date.now() - startedAt > timeoutMs) throw new Error('Timed out waiting for worker state.');
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+}
+
 test('worker exposes a warming-up snapshot before history is loaded', () => {
   const worker = createMarketWorker({ symbols: ['BTCUSDT'] });
   const snapshot = worker.getSnapshot();
@@ -66,6 +95,76 @@ test('worker syncs its active watchlist, retains shared symbols, and ignores unc
   assert.throws(() => worker.setSymbols(['BTCUSD']), /1-5/);
 });
 
+test('worker retries failed history, logs the exact error, and resumes signal analysis', async () => {
+  let firstKlineFailures = 0;
+  const logs = [];
+  const signals = [];
+  const worker = createMarketWorker({
+    symbols: ['BTCUSDT'],
+    WebSocketImpl: FakeWebSocket,
+    bootstrapRetryBaseMs: 2,
+    bootstrapRetryMaxMs: 8,
+    logger: { error: (message) => logs.push(message) },
+    onSignal: (signal) => signals.push(signal),
+    requestMarketData: async (path) => {
+      if (path.includes('/klines?')) {
+        const timeframe = new URLSearchParams(path.split('?')[1]).get('interval');
+        if (timeframe === '1m' && firstKlineFailures < 3) {
+          firstKlineFailures += 1;
+          throw new Error('HTTP 503: upstream unavailable');
+        }
+        return makeBinanceRows(timeframe);
+      }
+      return {
+        lastPrice: '100',
+        priceChangePercent: '1',
+        highPrice: '110',
+        lowPrice: '90',
+        volume: '100',
+        quoteVolume: '10000',
+      };
+    },
+  });
+
+  worker.start();
+  await waitFor(() => worker.getSnapshot().readySymbols === 1);
+  const snapshot = worker.getSnapshot();
+
+  assert.equal(snapshot.status, 'partial');
+  assert.equal(snapshot.symbols[0].analysis.signalType, 'RETAIL_TRAP_BHEED');
+  assert.ok(signals.some((signal) => signal.signalType === 'RETAIL_TRAP_BHEED'));
+  assert.ok(logs.some((message) => message.includes('HTTP 503: upstream unavailable')));
+  assert.ok(logs.some((message) => message.includes('retrying in 2ms')));
+  assert.ok(logs.some((message) => message.includes('retrying in 4ms')));
+  assert.ok(logs.some((message) => message.includes('retrying in 8ms')));
+  assert.equal(snapshot.symbols[0].error, null);
+  worker.stop();
+});
+
+test('worker cancels pending bootstrap retries when stopped or watchlist changes', async () => {
+  let calls = 0;
+  const worker = createMarketWorker({
+    symbols: ['BTCUSDT'],
+    WebSocketImpl: FakeWebSocket,
+    bootstrapRetryBaseMs: 20,
+    bootstrapRetryMaxMs: 20,
+    logger: { error: () => {} },
+    requestMarketData: async () => {
+      calls += 1;
+      throw new Error('REST unavailable');
+    },
+  });
+
+  worker.start();
+  await waitFor(() => calls > 0);
+  assert.equal(worker.setSymbols(['ETHUSDT']), true);
+  await waitFor(() => calls > 1);
+  worker.stop();
+  const callsAtStop = calls;
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(calls, callsAtStop);
+});
+
 test('server engine computes all ten LTF indicator votes and an MTF signal', () => {
   const candles = {
     '1m': makeCandles('1m'),
@@ -79,6 +178,51 @@ test('server engine computes all ten LTF indicator votes and an MTF signal', () 
   assert.equal(analysis.macroTrend, 'BULLISH');
   assert.equal(analysis.retailSentiment, 'EXTREME BULLISH');
   assert.equal(analysis.signalType, 'RETAIL_TRAP_BHEED');
+  assert.ok(Number.isFinite(analysis.suggestedSL));
+  assert.ok(Number.isFinite(analysis.suggestedTarget));
+  const candles1m = candles['1m'];
+  const entry = candles1m.at(-1).close;
+  const atr = ATR.calculate({
+    period: 14,
+    high: candles1m.map((candle) => candle.high),
+    low: candles1m.map((candle) => candle.low),
+    close: candles1m.map((candle) => candle.close),
+  }).at(-1);
+  const expectedStop = Math.max(...candles1m.slice(-5).map((candle) => candle.high)) + atr;
+  assert.equal(analysis.suggestedSL, expectedStop);
+  assert.equal(analysis.suggestedTarget, entry - 2 * (expectedStop - entry));
+});
+
+test('server engine calculates a 1:2 LONG plan for a stop-loss hunt signal', () => {
+  const candles = {
+    '1m': makeCandles('1m', 'DOWN'),
+    '5m': makeCandles('5m', 'DOWN'),
+    '1h': makeCandles('1h', 'UP'),
+    '4h': makeCandles('4h', 'UP'),
+  };
+  const oneMinute = candles['1m'];
+  const support = Math.min(...oneMinute.slice(-16, -1).map((candle) => candle.low));
+  oneMinute[oneMinute.length - 1] = {
+    ...oneMinute.at(-1),
+    open: support + 0.2,
+    high: support + 0.4,
+    low: support - 2,
+    close: support + 0.05,
+    volume: 20,
+  };
+
+  const analysis = makeAnalysis(makeTicker(), candles);
+  assert.equal(analysis?.signalType, 'STOP_LOSS_HUNT_ENTRY');
+  const entry = oneMinute.at(-1).close;
+  const atr = ATR.calculate({
+    period: 14,
+    high: oneMinute.map((candle) => candle.high),
+    low: oneMinute.map((candle) => candle.low),
+    close: oneMinute.map((candle) => candle.close),
+  }).at(-1);
+  const expectedStop = Math.min(...oneMinute.slice(-5).map((candle) => candle.low)) - atr;
+  assert.equal(analysis?.suggestedSL, expectedStop);
+  assert.equal(analysis?.suggestedTarget, entry + 2 * (entry - expectedStop));
 });
 
 test('server engine blocks analysis when any timeframe is short of 100 candles', () => {

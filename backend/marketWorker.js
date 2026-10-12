@@ -1,6 +1,7 @@
 import axios from 'axios';
 import {
   adx,
+  ATR,
   BollingerBands,
   CCI,
   EMA,
@@ -89,17 +90,37 @@ function parseKline(row, now = Date.now()) {
   return candle;
 }
 
-async function fetchBinance(path) {
+async function delayWithSignal(milliseconds, signal) {
+  if (signal?.aborted) throw new Error('Binance REST request cancelled.');
+  if (!signal) return delay(milliseconds);
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, milliseconds);
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
+      reject(new Error('Binance REST request cancelled.'));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+async function fetchBinance(path, signal) {
   const waitMs = binanceRateLimitUntil - Date.now();
-  if (waitMs > 0) await delay(waitMs);
+  if (waitMs > 0) await delayWithSignal(waitMs, signal);
   let lastError;
   for (const base of BINANCE_REST_BASES) {
+    if (signal?.aborted) throw new Error('Binance REST request cancelled.');
     try {
       return (await axios.get(`${base}${path}`, {
         timeout: 12_000,
+        signal,
         headers: { Accept: 'application/json' },
       })).data;
     } catch (error) {
+      if (signal?.aborted) throw new Error('Binance REST request cancelled.');
       lastError = error;
       const status = error?.response?.status;
       if (status === 418 || status === 429) {
@@ -107,11 +128,21 @@ async function fetchBinance(path) {
         binanceRateLimitUntil = Date.now() + (Number.isFinite(retryAfter) && retryAfter > 0
           ? retryAfter * 1000
           : 60_000);
-        throw new Error(`Binance rate limit response HTTP ${status}; REST refresh stopped.`);
+        const responseMessage = typeof error.response.data?.msg === 'string'
+          ? `: ${error.response.data.msg}`
+          : '';
+        throw new Error(`Binance rate limit response HTTP ${status}${responseMessage}; REST refresh paused.`);
       }
     }
   }
-  throw new Error(`Unable to fetch Binance public market data: ${lastError?.message ?? 'unknown error'}`);
+  const status = lastError?.response?.status;
+  const responseMessage = lastError?.response?.data?.msg;
+  const details = status
+    ? `HTTP ${status}${responseMessage ? `: ${responseMessage}` : ''}`
+    : lastError?.code
+      ? `${lastError.code}: ${lastError.message}`
+      : lastError?.message ?? 'unknown error';
+  throw new Error(`Unable to fetch Binance public market data: ${details}`);
 }
 
 function finiteCandles(candles) {
@@ -126,6 +157,29 @@ function finiteCandles(candles) {
 
 function latest(values) {
   return values.at(-1);
+}
+
+function calculateRiskLevels(candles, entry, direction) {
+  const closed = candles.filter((candle) => candle.isClosed);
+  const atr = latest(ATR.calculate({
+    period: 14,
+    high: closed.map((candle) => candle.high),
+    low: closed.map((candle) => candle.low),
+    close: closed.map((candle) => candle.close),
+  }));
+  const lastFive = closed.slice(-5);
+  if (atr === undefined || !Number.isFinite(atr) || lastFive.length < 5) return null;
+
+  const suggestedSL = direction === 'LONG'
+    ? Math.min(...lastFive.map((candle) => candle.low)) - atr
+    : Math.max(...lastFive.map((candle) => candle.high)) + atr;
+  const risk = direction === 'LONG' ? entry - suggestedSL : suggestedSL - entry;
+  if (!Number.isFinite(suggestedSL) || !Number.isFinite(risk) || risk <= 0) return null;
+
+  return {
+    suggestedSL,
+    suggestedTarget: direction === 'LONG' ? entry + 2 * risk : entry - 2 * risk,
+  };
 }
 
 function countDirection(directions, direction) {
@@ -314,8 +368,11 @@ function makeAnalysis(ticker, candles) {
     lowerWickRatio > 0.5 &&
     volumeRatio > 1.5
   ) {
+    const riskLevels = calculateRiskLevels(candles['1m'], currentCandle.close, 'LONG');
+    if (!riskLevels) return null;
     return {
       ...base,
+      ...riskLevels,
       signalType: 'STOP_LOSS_HUNT_ENTRY',
       severity: 'OPPORTUNITY',
       badgeText: 'HTF BULLISH · RETAIL PANIC · SUPPORT SWEEP',
@@ -357,8 +414,11 @@ function makeAnalysis(ticker, candles) {
   }
 
   if (consensus.sentiment === 'EXTREME BULLISH' && threeGreen && volumePlateau) {
+    const riskLevels = calculateRiskLevels(candles['1m'], currentCandle.close, 'SHORT');
+    if (!riskLevels) return null;
     return {
       ...base,
+      ...riskLevels,
       signalType: 'RETAIL_TRAP_BHEED',
       severity: 'CRITICAL',
       badgeText: 'RETAIL FOMO · VOLUME PLATEAU',
@@ -410,6 +470,11 @@ export function createMarketWorker({
   symbols = readSymbols(),
   onStatus = () => {},
   onSignal = () => {},
+  requestMarketData = (path, { signal } = {}) => fetchBinance(path, signal),
+  WebSocketImpl = WebSocket,
+  bootstrapRetryBaseMs = 1_000,
+  bootstrapRetryMaxMs = 60_000,
+  logger = console,
 } = {}) {
   let trackedSymbols = normalizeSymbols(symbols);
   let market = new Map(trackedSymbols.map((symbol) => [
@@ -431,20 +496,26 @@ export function createMarketWorker({
   let oneHourTimer = null;
   let fourHourTimer = null;
   let refreshInProgress = false;
+  let bootstrapController = null;
 
   const publishUpdate = (entry) => {
     entry.analysis = entry.ticker ? makeAnalysis(entry.ticker, entry.candles) : null;
     entry.lastUpdated = Date.now();
-    entry.error = null;
+    entry.error = Object.values(entry.bootstrapErrors ?? {})[0] ?? null;
     lastUpdated = entry.lastUpdated;
-    lastError = null;
+    lastError = [...market.values()].find((item) => item.error)?.error ?? null;
     if (entry.analysis) notifySignal(entry.analysis);
     onStatus();
   };
 
-  const fetchKlines = async (symbol, timeframe, generation = watchlistGeneration) => {
+  const fetchKlines = async (
+    symbol,
+    timeframe,
+    generation = watchlistGeneration,
+    signal
+  ) => {
     const path = `/klines?symbol=${encodeURIComponent(symbol)}&interval=${timeframe}&limit=100`;
-    const rows = await fetchBinance(path);
+    const rows = await requestMarketData(path, { signal });
     if (stopped || generation !== watchlistGeneration) return;
     if (!Array.isArray(rows) || rows.length !== 100) {
       throw new Error(`Binance did not return 100 ${timeframe} candles for ${symbol}.`);
@@ -456,31 +527,84 @@ export function createMarketWorker({
     if (entry.ticker) publishUpdate(entry);
   };
 
-  const bootstrap = async () => {
+  const bootstrap = () => {
+    bootstrapController?.abort();
+    if (stopped) return;
+    const controller = new AbortController();
+    bootstrapController = controller;
     const generation = watchlistGeneration;
     const symbolsToBootstrap = [...trackedSymbols];
-    for (const symbol of symbolsToBootstrap) {
-      if (stopped || generation !== watchlistGeneration) return;
-      for (const timeframe of TIMEFRAMES) {
-        if (stopped || generation !== watchlistGeneration) return;
+    const isCurrent = () =>
+      !controller.signal.aborted &&
+      !stopped &&
+      generation === watchlistGeneration;
+
+    const retryUntilSuccess = async (symbol, resource, operation) => {
+      let attempt = 0;
+      while (isCurrent()) {
         try {
-          await fetchKlines(symbol, timeframe, generation);
-        } catch (error) {
-          if (generation !== watchlistGeneration) return;
+          await operation();
+          if (!isCurrent()) return false;
           const entry = market.get(symbol);
-          if (!entry) return;
-          entry.error = error.message;
-          lastError = error.message;
-          console.error(`Market bootstrap failed for ${symbol} ${timeframe}:`, error.message);
+          if (entry?.bootstrapErrors) {
+            delete entry.bootstrapErrors[resource];
+            entry.error = Object.values(entry.bootstrapErrors)[0] ?? null;
+            lastError = [...market.values()].find((item) => item.error)?.error ?? null;
+            onStatus();
+          }
+          return true;
+        } catch (error) {
+          if (!isCurrent()) return false;
+          const entry = market.get(symbol);
+          if (!entry) return false;
+          const message = error instanceof Error ? error.message : String(error);
+          entry.bootstrapErrors ??= {};
+          entry.bootstrapErrors[resource] = message;
+          entry.error = Object.values(entry.bootstrapErrors)[0] ?? message;
+          lastError = entry.error;
+          const waitMs = Math.min(
+            bootstrapRetryBaseMs * (2 ** attempt),
+            bootstrapRetryMaxMs
+          );
+          attempt += 1;
+          logger.error(
+            `Market bootstrap failed for ${symbol} ${resource} (attempt ${attempt}); retrying in ${waitMs}ms: ${message}`
+          );
+          onStatus();
+          try {
+            await delayWithSignal(waitMs, controller.signal);
+          } catch {
+            return false;
+          }
         }
-        await delay(150);
       }
-      if (stopped || generation !== watchlistGeneration) return;
-      try {
-        const data = await fetchBinance(`/ticker/24hr?symbol=${encodeURIComponent(symbol)}`);
-        if (stopped || generation !== watchlistGeneration) return;
-        const entry = market.get(symbol);
-        if (!entry) return;
+      return false;
+    };
+
+    return Promise.all(symbolsToBootstrap.map(async (symbol) => {
+      const entry = market.get(symbol);
+      if (!entry) return;
+      for (const timeframe of TIMEFRAMES) {
+        if (!isCurrent()) return;
+        const succeeded = await retryUntilSuccess(
+          symbol,
+          `klines ${timeframe}`,
+          () => fetchKlines(symbol, timeframe, generation, controller.signal)
+        );
+        if (!succeeded) return;
+        try {
+          await delayWithSignal(150, controller.signal);
+        } catch {
+          return;
+        }
+      }
+      if (!isCurrent()) return;
+      const tickerSucceeded = await retryUntilSuccess(symbol, '24hr ticker', async () => {
+        const data = await requestMarketData(
+          `/ticker/24hr?symbol=${encodeURIComponent(symbol)}`,
+          { signal: controller.signal }
+        );
+        if (!isCurrent()) return;
         entry.ticker = {
           symbol,
           baseAsset: symbol.replace(/USDT$/, ''),
@@ -493,18 +617,23 @@ export function createMarketWorker({
           quoteVolume24h: Number(data.quoteVolume),
           lastUpdated: Date.now(),
         };
+        if (Object.values(entry.ticker).some((value) =>
+          typeof value === 'number' && !Number.isFinite(value)
+        )) {
+          throw new Error(`Binance returned an invalid 24hr ticker for ${symbol}.`);
+        }
         publishUpdate(entry);
-      } catch (error) {
-        if (generation !== watchlistGeneration) return;
-        const entry = market.get(symbol);
-        if (!entry) return;
-        entry.error = error.message;
-        lastError = error.message;
-        console.error(`Ticker bootstrap failed for ${symbol}:`, error.message);
+      });
+      if (tickerSucceeded) {
+        try {
+          await delayWithSignal(150, controller.signal);
+        } catch {
+          return;
+        }
       }
-      await delay(150);
-    }
-    if (generation === watchlistGeneration) onStatus();
+    })).then(() => {
+      if (isCurrent()) onStatus();
+    });
   };
 
   const scheduleReconnect = () => {
@@ -527,13 +656,13 @@ export function createMarketWorker({
       ...TIMEFRAMES.map((timeframe) => `${symbol.toLowerCase()}@kline_${timeframe}`),
     ]).join('/');
     try {
-      socket = new WebSocket(`wss://stream.binance.com:9443/stream?streams=${streams}`);
+      socket = new WebSocketImpl(`wss://stream.binance.com:9443/stream?streams=${streams}`);
       const currentSocket = socket;
       currentSocket.on('open', () => {
         if (socket !== currentSocket) return;
         streamConnected = true;
         reconnectAttempt = 0;
-        lastError = null;
+        lastError = [...market.values()].find((item) => item.error)?.error ?? null;
         onStatus();
         console.info(`Binance market worker connected for ${trackedSymbols.join(', ')}.`);
       });
@@ -673,6 +802,7 @@ export function createMarketWorker({
 
   function stop() {
     stopped = true;
+    bootstrapController?.abort();
     if (reconnectTimer) clearTimeout(reconnectTimer);
     if (oneHourTimer) clearInterval(oneHourTimer);
     if (fourHourTimer) clearInterval(fourHourTimer);
@@ -698,6 +828,7 @@ export function createMarketWorker({
 
     trackedSymbols = normalizedSymbols;
     watchlistGeneration += 1;
+    bootstrapController?.abort();
     market = new Map(trackedSymbols.map((symbol) => [
       symbol,
       market.get(symbol) ?? {

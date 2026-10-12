@@ -16,6 +16,8 @@ import { SelectedCoinsModal } from './components/SelectedCoinsModal';
 import { SearchTickerModal } from './components/SearchTickerModal';
 import { BottomNavBar } from './components/BottomNavBar';
 import { SettingsModal } from './components/SettingsModal';
+import { OrderHistoryPage, ProfilePage } from './components/PaperTradingPages';
+import { usePaperTradingContext } from './hooks/usePaperTrading';
 import {
   LiveCoinTicker,
   Candle,
@@ -26,6 +28,7 @@ import {
 } from './types/crypto';
 import { BeforeInstallPromptEvent } from './types/pwa';
 import { AlertPreferences, isAlertVoiceStyle } from './types/alerts';
+import { PaperTradeDirection } from './types/paperTrading';
 import { ShieldAlert, Target, AlertOctagon, HelpCircle, ChevronDown, ChevronUp, Settings } from 'lucide-react';
 
 const MAX_COINS = 5;
@@ -78,6 +81,41 @@ function mergeCandles(existing: Candle[], incoming: Candle[]): Candle[] {
 }
 
 export default function App() {
+  const [appRoute, setAppRoute] = useState<'radar' | 'profile' | 'order-history'>(() => {
+    if (window.location.pathname === '/profile') return 'profile';
+    if (window.location.pathname === '/order-history') return 'order-history';
+    return 'radar';
+  });
+  const [tradeDraft, setTradeDraft] = useState<TrapAnalysis | null>(null);
+  const paperTrading = usePaperTradingContext();
+  const paperTradeSymbols = useMemo(
+    () => [...new Set(paperTrading.trades
+      .filter((trade) => trade.status === 'OPEN')
+      .map((trade) => trade.symbol))],
+    [paperTrading.trades]
+  );
+
+  const navigateTo = useCallback((route: 'radar' | 'profile' | 'order-history') => {
+    const path = route === 'radar' ? '/' : `/${route}`;
+    if (window.location.pathname !== path) window.history.pushState({}, '', path);
+    setAppRoute(route);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, []);
+
+  useEffect(() => {
+    const onPopState = () => {
+      setAppRoute(
+        window.location.pathname === '/order-history'
+          ? 'order-history'
+          : window.location.pathname === '/profile'
+            ? 'profile'
+            : 'radar'
+      );
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
   // 1. Mandatory State Management per strict instruction:
   const [isLiveConnected, setIsLiveConnected] = useState(false);
   const [apiError, setApiError] = useState("");
@@ -177,6 +215,7 @@ export default function App() {
               : 'Could not restore push notifications on this device. Try enabling them again in Settings.'
           );
         }
+
       } finally {
         if (!isCancelled) {
           setPushSetupLoading(false);
@@ -628,6 +667,9 @@ export default function App() {
             `${symbol.toLowerCase()}@kline_1m`,
             `${symbol.toLowerCase()}@kline_5m`,
           ]),
+          ...paperTradeSymbols
+            .filter((symbol) => !selectedCoins.includes(symbol))
+            .map((symbol) => `${symbol.toLowerCase()}@ticker`),
           '!ticker@arr',
         ].join('/');
         ws = new WebSocket(`wss://stream.binance.com:9443/stream?streams=${streams}`);
@@ -670,7 +712,10 @@ export default function App() {
               ) return;
 
               const symbol = message.s.toUpperCase();
-              if (!selectedCoinsRef.current.includes(symbol)) return;
+              if (
+                !selectedCoinsRef.current.includes(symbol) &&
+                !paperTradeSymbols.includes(symbol)
+              ) return;
               const timeframe: '1m' | '5m' = stream.endsWith('@kline_5m') ? '5m' : '1m';
               const candle: Candle = {
                 openTime: Number(rawKline.t),
@@ -739,7 +784,7 @@ export default function App() {
             setLastStreamTick(now);
 
             const usdtList: BinanceSearchResult[] = [];
-            const activeSet = new Set(selectedCoinsRef.current);
+            const activeSet = new Set([...selectedCoinsRef.current, ...paperTradeSymbols]);
             const incomingUpdates: Record<string, LiveCoinTicker> = {};
 
             for (const item of tickers) {
@@ -825,7 +870,7 @@ export default function App() {
       Object.values(priceFlashTimersRef.current).forEach((timer) => window.clearTimeout(timer));
       priceFlashTimersRef.current = {};
     };
-  }, [selectedCoins]);
+  }, [paperTradeSymbols, selectedCoins]);
 
   // Strict validation: Max 5 coins
   const addCoin = useCallback(
@@ -893,16 +938,10 @@ export default function App() {
   );
   const currentAnalysis = analyses[activeSymbol] || topActiveTrap;
 
-  const activeTrapCount = useMemo(() => {
-    return Object.values(analyses).filter(
-      (analysis) => analysis.signalType !== 'NEUTRAL_SCANNING'
-    ).length;
-  }, [analyses]);
-
   // =========================================================================
   // 5. Hard UI Blocker: EXACT logic requested by user
   // =========================================================================
-  if (!isLiveConnected && !hasServerMarketData) {
+  if (!isLiveConnected && !hasServerMarketData && appRoute === 'radar') {
     return (
       <div className="relative h-screen w-screen bg-gray-900 text-red-500 flex flex-col items-center justify-center font-bold text-xl">
         <button
@@ -950,11 +989,14 @@ export default function App() {
         onOpenSelectedCoins={() => setIsSelectedCoinsOpen(true)}
         onOpenSearch={() => setIsSearchOpen(true)}
         onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenProfile={() => navigateTo('profile')}
         isConnected={isLiveConnected}
       />
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 pt-4 sm:pt-6 lg:pt-8 flex flex-col gap-6 lg:gap-8 transition-all duration-300">
+        {appRoute === 'radar' ? (
+        <>
         {/* Real-time streaming status banner */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-800/60">
           <div className="flex items-center gap-2 text-xs font-mono text-slate-400">
@@ -996,6 +1038,10 @@ export default function App() {
           onSelectCoin={(sym) => setActiveSymbol(sym)}
           priceFlash={priceFlash[activeSymbol] || null}
           isTopRanked={activeSymbol === topActiveTrap?.symbol}
+          onBookTrade={(analysis) => {
+            setTradeDraft(analysis);
+            navigateTo('profile');
+          }}
         />
 
         <CoinsDrawer
@@ -1061,13 +1107,46 @@ export default function App() {
             </div>
           )}
         </div>
+        </>
+        ) : appRoute === 'profile' ? (
+          <ProfilePage
+            availableFunding={paperTrading.availableFunding}
+            allocationPercent={paperTrading.allocationPercent}
+            trades={paperTrading.trades}
+            prices={Object.fromEntries(
+              Object.entries(tickersMap).map(([symbol, ticker]) => [symbol, ticker.price])
+            )}
+            draft={tradeDraft ? {
+              symbol: tradeDraft.symbol,
+              direction: tradeDraft.signalType === 'STOP_LOSS_HUNT_ENTRY' ? 'LONG' : 'SHORT',
+              signalType: tradeDraft.signalType,
+            } : null}
+            analysis={tradeDraft ?? undefined}
+            onFundingChange={paperTrading.setAvailableFunding}
+            onAllocationChange={paperTrading.setAllocationPercent}
+            onOpenTrade={(symbol, direction: PaperTradeDirection, signalType) => {
+              const livePrice = tickersMap[symbol]?.price;
+              if (!livePrice) throw new Error(`Waiting for a live Binance price for ${symbol}.`);
+              paperTrading.openTrade(symbol, direction, livePrice, signalType);
+            }}
+            onCloseTrade={paperTrading.closeTrade}
+            onOpenHistory={() => navigateTo('order-history')}
+            onClearDraft={() => setTradeDraft(null)}
+          />
+        ) : (
+          <OrderHistoryPage
+            trades={paperTrading.trades}
+            onBack={() => navigateTo('profile')}
+          />
+        )}
       </main>
 
       <BottomNavBar
         onOpenCoinsDrawer={() => setIsCoinsDrawerOpen(true)}
         onOpenSearch={() => setIsSearchOpen(true)}
         remainingCount={Math.max(0, selectedCoins.length - 1)}
-        activeTrapCount={activeTrapCount}
+        onOpenProfile={() => navigateTo('profile')}
+        onOpenRadar={() => navigateTo('radar')}
       />
 
       {/* Selected Coins Manager (Triggered by Top-Left Mascot Logo) */}
@@ -1121,6 +1200,7 @@ export default function App() {
         onChangeVoiceStyle={(voiceStyle) =>
           setAlertPreferences((current) => ({ ...current, voiceStyle }))
         }
+
         onTestVoice={testVoiceAlert}
       />
     </div>

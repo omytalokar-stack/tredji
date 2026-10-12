@@ -67,6 +67,12 @@ function isAnalysis(value: unknown): value is TrapAnalysis {
     typeof value.baseAsset === 'string' &&
     ['currentPrice', 'priceChangePercent', 'high24h', 'low24h', 'currentVolume', 'avgVolume20', 'volumeRatio', 'lowerWickRatio', 'recentSupport', 'recentResistance', 'retailBuyCount', 'retailSellCount', 'timestamp']
       .every((field) => typeof value[field] === 'number' && Number.isFinite(value[field])) &&
+    ['suggestedSL', 'suggestedTarget'].every((field) =>
+      value[field] === undefined || (typeof value[field] === 'number' && Number.isFinite(value[field]))
+    ) &&
+    (value.signalType !== 'RETAIL_TRAP_BHEED' && value.signalType !== 'STOP_LOSS_HUNT_ENTRY' ||
+      (typeof value.suggestedSL === 'number' && Number.isFinite(value.suggestedSL) &&
+        typeof value.suggestedTarget === 'number' && Number.isFinite(value.suggestedTarget))) &&
     trends.includes(String(value.macroTrend)) &&
     trends.includes(String(value.oneHourTrend)) &&
     trends.includes(String(value.fourHourTrend)) &&

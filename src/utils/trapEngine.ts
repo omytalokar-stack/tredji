@@ -1,5 +1,6 @@
 import {
   adx,
+  ATR,
   BollingerBands,
   CCI,
   EMA,
@@ -24,6 +25,33 @@ const REQUIRED_CANDLE_COUNT = 100;
 const BASELINE_CANDLE_COUNT = 20;
 const SUPPORT_CANDLE_COUNT = 15;
 const MIN_CONSENSUS_VOTES = 7;
+
+function calculateRiskLevels(
+  candles: Candle[],
+  entry: number,
+  direction: 'LONG' | 'SHORT'
+): Pick<TrapAnalysis, 'suggestedSL' | 'suggestedTarget'> | null {
+  const closed = candles.filter((candle) => candle.isClosed);
+  const atr = latest(ATR.calculate({
+    period: 14,
+    high: closed.map((candle) => candle.high),
+    low: closed.map((candle) => candle.low),
+    close: closed.map((candle) => candle.close),
+  }));
+  const lastFive = closed.slice(-5);
+  if (atr === undefined || !Number.isFinite(atr) || lastFive.length < 5) return null;
+
+  const suggestedSL = direction === 'LONG'
+    ? Math.min(...lastFive.map((candle) => candle.low)) - atr
+    : Math.max(...lastFive.map((candle) => candle.high)) + atr;
+  const risk = direction === 'LONG' ? entry - suggestedSL : suggestedSL - entry;
+  if (!Number.isFinite(suggestedSL) || !Number.isFinite(risk) || risk <= 0) return null;
+
+  return {
+    suggestedSL,
+    suggestedTarget: direction === 'LONG' ? entry + 2 * risk : entry - 2 * risk,
+  };
+}
 
 function finiteValues(candles: Candle[]): boolean {
   return candles.every((candle) =>
@@ -268,8 +296,11 @@ export function analyzeMarketTrap(
     lowerWickRatio > 0.5 &&
     volumeRatio > 1.5
   ) {
+    const riskLevels = calculateRiskLevels(candles['1m'], currentCandle.close, 'LONG');
+    if (!riskLevels) return null;
     return {
       ...base,
+      ...riskLevels,
       signalType: 'STOP_LOSS_HUNT_ENTRY',
       severity: 'OPPORTUNITY',
       badgeText: 'HTF BULLISH · RETAIL PANIC · SUPPORT SWEEP',
@@ -306,8 +337,11 @@ export function analyzeMarketTrap(
   }
 
   if (consensus.sentiment === 'EXTREME BULLISH' && threeGreen && volumePlateau) {
+    const riskLevels = calculateRiskLevels(candles['1m'], currentCandle.close, 'SHORT');
+    if (!riskLevels) return null;
     return {
       ...base,
+      ...riskLevels,
       signalType: 'RETAIL_TRAP_BHEED',
       severity: 'CRITICAL',
       badgeText: 'RETAIL FOMO · VOLUME PLATEAU',

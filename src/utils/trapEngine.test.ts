@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { ATR } from 'technicalindicators';
 import {
   Candle,
   LiveCoinTicker,
@@ -156,6 +157,22 @@ test('detects stop-loss entry only with bullish macro and bearish lower-timefram
   assert.equal(analysis?.macroTrend, 'BULLISH');
   assert.equal(analysis?.retailSentiment, 'EXTREME BEARISH');
   assert.equal(analysis?.signalType, 'STOP_LOSS_HUNT_ENTRY');
+  assert.ok(analysis?.suggestedSL !== undefined);
+  assert.ok(analysis?.suggestedTarget !== undefined);
+
+  const signalCandle = oneMinute.at(-1)!;
+  const atr = ATR.calculate({
+    period: 14,
+    high: oneMinute.map((candle) => candle.high),
+    low: oneMinute.map((candle) => candle.low),
+    close: oneMinute.map((candle) => candle.close),
+  }).at(-1)!;
+  const expectedStop = Math.min(...oneMinute.slice(-5).map((candle) => candle.low)) - atr;
+  assert.equal(analysis?.suggestedSL, expectedStop);
+  assert.equal(
+    analysis?.suggestedTarget,
+    signalCandle.close + 2 * (signalCandle.close - expectedStop)
+  );
 });
 
 test('fake breakout takes precedence when breakout and retail FOMO both match', () => {
@@ -188,4 +205,21 @@ test('detects retail FOMO only with extreme bullish 1m and 5m consensus', () => 
   assert.equal(analysis?.retailSentiment, 'EXTREME BULLISH');
   assert.equal(analysis?.signalType, 'RETAIL_TRAP_BHEED');
   assert.match(analysis?.actionAdvice ?? '', /DO NOT CHASE/);
+  assert.ok(analysis?.suggestedSL !== undefined);
+  assert.ok(analysis?.suggestedTarget !== undefined);
+
+  const signalCandles = makeTrendingTimeframes('UP', 'UP')['1m'];
+  const signalCandle = signalCandles.at(-1)!;
+  const atr = ATR.calculate({
+    period: 14,
+    high: signalCandles.map((candle) => candle.high),
+    low: signalCandles.map((candle) => candle.low),
+    close: signalCandles.map((candle) => candle.close),
+  }).at(-1)!;
+  const expectedStop = Math.max(...signalCandles.slice(-5).map((candle) => candle.high)) + atr;
+  assert.equal(analysis?.suggestedSL, expectedStop);
+  assert.equal(
+    analysis?.suggestedTarget,
+    signalCandle.close - 2 * (expectedStop - signalCandle.close)
+  );
 });

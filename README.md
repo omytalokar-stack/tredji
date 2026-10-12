@@ -49,6 +49,12 @@ can still interrupt the worker; confirm the current hosting plan supports
 this use. Push delivery still requires the backend worker to be running and
 connected to Binance.
 
+The worker retries failed historical-candle and ticker bootstrap requests
+indefinitely with capped exponential backoff, logging each failure and retry
+delay. Bootstrap retries are cancelled when the worker stops or its watchlist
+changes. Once all four 100-candle histories and a ticker are available,
+analysis resumes and eligible signal transitions can trigger push delivery.
+
 ## Web Push deployment
 
 Configure `VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY` in the backend environment

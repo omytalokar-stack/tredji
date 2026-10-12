@@ -73,6 +73,8 @@ export interface TrapAnalysis {
   indicatorVotes: IndicatorVote[];
   signalType: TrapSignalType;
   severity: SignalSeverity;
+  suggestedSL?: number;
+  suggestedTarget?: number;
   badgeText: string;
   headline: string;
   taglineHindi: string;
