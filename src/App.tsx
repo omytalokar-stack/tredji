@@ -9,6 +9,7 @@ import { fetchLiveKlines } from './services/binanceApi';
 import { fetchMarketStatus, MarketStatusSnapshot } from './services/marketStatusApi';
 import { fetchPushPublicKey, subscribeForPush, unsubscribeFromPush } from './services/pushNotifications';
 import { analyzeMarketTrap } from './utils/trapEngine';
+import { getSignalDirection } from './utils/tradeSignals';
 import { TopHeader } from './components/TopHeader';
 import { MainTrapCard } from './components/MainTrapCard';
 import { CoinsDrawer } from './components/CoinsDrawer';
@@ -16,6 +17,7 @@ import { SelectedCoinsModal } from './components/SelectedCoinsModal';
 import { SearchTickerModal } from './components/SearchTickerModal';
 import { BottomNavBar } from './components/BottomNavBar';
 import { SettingsModal } from './components/SettingsModal';
+import { TradeAlertModal } from './components/TradeAlertModal';
 import { OrderHistoryPage, ProfilePage } from './components/PaperTradingPages';
 import { usePaperTradingContext } from './hooks/usePaperTrading';
 import {
@@ -87,6 +89,8 @@ export default function App() {
     return 'radar';
   });
   const [tradeDraft, setTradeDraft] = useState<TrapAnalysis | null>(null);
+  const [tradeEntryPrice, setTradeEntryPrice] = useState<number | null>(null);
+  const [tradeAlert, setTradeAlert] = useState<TrapAnalysis | null>(null);
   const paperTrading = usePaperTradingContext();
   const paperTradeSymbols = useMemo(
     () => [...new Set(paperTrading.trades
@@ -500,6 +504,19 @@ export default function App() {
         continue;
       }
 
+      if (
+        appRoute === 'radar' &&
+        (analysis.severity === 'CRITICAL' ||
+          analysis.severity === 'OPPORTUNITY' ||
+          analysis.signalType === 'SCALP_OPPORTUNITY') &&
+        Number.isFinite(analysis.currentPrice) &&
+        analysis.currentPrice > 0 &&
+        Number.isFinite(analysis.suggestedSL) &&
+        Number.isFinite(analysis.suggestedTarget)
+      ) {
+        setTradeAlert((current) => current ?? analysis);
+      }
+
       const actionDescription = analysis.actionType === 'ENTRY'
         ? 'Potential buy pattern detected.'
         : 'Risk alert. Avoid chasing this move.';
@@ -539,7 +556,7 @@ export default function App() {
         })();
       }
     }
-  }, [alertPreferences, analyses, hasServerMarketData, isLiveConnected, selectedCoins, speakAlert]);
+  }, [alertPreferences, analyses, appRoute, hasServerMarketData, isLiveConnected, selectedCoins, speakAlert]);
 
   useEffect(() => {
     selectedCoinsRef.current = selectedCoins;
@@ -1050,7 +1067,9 @@ export default function App() {
           priceFlash={priceFlash[activeSymbol] || null}
           isTopRanked={activeSymbol === topActiveTrap?.symbol}
           onBookTrade={(analysis) => {
-            setTradeDraft(analysis);
+            const entryPrice = tickersMap[analysis.symbol]?.price ?? analysis.currentPrice;
+            setTradeDraft({ ...analysis, currentPrice: entryPrice });
+            setTradeEntryPrice(entryPrice);
             navigateTo('profile');
           }}
         />
@@ -1129,22 +1148,22 @@ export default function App() {
             )}
             draft={tradeDraft ? {
               symbol: tradeDraft.symbol,
-              direction: tradeDraft.signalType === 'STOP_LOSS_HUNT_ENTRY' || tradeDraft.signalType === 'SCALP_OPPORTUNITY'
-                ? 'LONG'
-                : 'SHORT',
+              direction: getSignalDirection(tradeDraft),
               signalType: tradeDraft.signalType,
+              entryPrice: tradeEntryPrice ?? tradeDraft.currentPrice,
             } : null}
             analysis={tradeDraft ?? undefined}
             onFundingChange={paperTrading.setAvailableFunding}
             onAllocationChange={paperTrading.setAllocationPercent}
-            onOpenTrade={(symbol, direction: PaperTradeDirection, signalType) => {
-              const livePrice = tickersMap[symbol]?.price;
-              if (!livePrice) throw new Error(`Waiting for a live Binance price for ${symbol}.`);
-              paperTrading.openTrade(symbol, direction, livePrice, signalType);
+            onOpenTrade={(symbol, direction: PaperTradeDirection, entryPrice, signalType) => {
+              paperTrading.openTrade(symbol, direction, entryPrice, signalType);
             }}
             onCloseTrade={paperTrading.closeTrade}
             onOpenHistory={() => navigateTo('order-history')}
-            onClearDraft={() => setTradeDraft(null)}
+            onClearDraft={() => {
+              setTradeDraft(null);
+              setTradeEntryPrice(null);
+            }}
           />
         ) : (
           <OrderHistoryPage
@@ -1160,6 +1179,19 @@ export default function App() {
         remainingCount={Math.max(0, selectedCoins.length - 1)}
         onOpenProfile={() => navigateTo('profile')}
         onOpenRadar={() => navigateTo('radar')}
+      />
+
+      <TradeAlertModal
+        analysis={appRoute === 'radar' ? tradeAlert : null}
+        livePrice={tradeAlert ? tickersMap[tradeAlert.symbol]?.price : undefined}
+        onBookTrade={(analysis, entryPrice) => {
+          setTradeDraft({ ...analysis, currentPrice: entryPrice });
+          setTradeEntryPrice(entryPrice);
+          setTradeAlert(null);
+          setActiveSymbol(analysis.symbol);
+          navigateTo('profile');
+        }}
+        onDismiss={() => setTradeAlert(null)}
       />
 
       {/* Selected Coins Manager (Triggered by Top-Left Mascot Logo) */}

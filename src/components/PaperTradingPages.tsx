@@ -18,6 +18,7 @@ interface TradeDraft {
   symbol: string;
   direction: PaperTradeDirection;
   signalType: string;
+  entryPrice: number;
 }
 
 interface ProfilePageProps {
@@ -29,7 +30,7 @@ interface ProfilePageProps {
   analysis?: TrapAnalysis;
   onFundingChange: (value: number) => void;
   onAllocationChange: (value: number) => void;
-  onOpenTrade: (symbol: string, direction: PaperTradeDirection, signalType: string) => void;
+  onOpenTrade: (symbol: string, direction: PaperTradeDirection, entryPrice: number, signalType: string) => void;
   onCloseTrade: (id: string, price: number) => void;
   onOpenHistory: () => void;
   onClearDraft: () => void;
@@ -136,13 +137,12 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
 
   const bookTrade = () => {
     if (!draft) return;
-    const livePrice = prices[draft.symbol];
-    if (!livePrice) {
-      setActionError(`Waiting for a live Binance price for ${draft.symbol}.`);
+    if (!draft.entryPrice || !Number.isFinite(draft.entryPrice)) {
+      setActionError(`Waiting for a valid entry price for ${draft.symbol}.`);
       return;
     }
     try {
-      onOpenTrade(draft.symbol, draft.direction, draft.signalType);
+      onOpenTrade(draft.symbol, draft.direction, draft.entryPrice, draft.signalType);
       setActionError('');
       onClearDraft();
     } catch (error) {
@@ -243,7 +243,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
             <div>
               <div className="text-xs font-mono uppercase tracking-widest text-cyan-300">Signal trade ticket</div>
               <h2 className="mt-1 text-xl font-bold text-white">{draft.direction} {draft.symbol}</h2>
-              <p className="mt-1 text-sm text-slate-300">{draft.signalType.replaceAll('_', ' ')} · market entry from the current Binance WebSocket price</p>
+              <p className="mt-1 text-sm text-slate-300">{draft.signalType.replaceAll('_', ' ')} · captured live entry {price(draft.entryPrice)}</p>
               {analysis?.suggestedSL !== undefined && analysis.suggestedTarget !== undefined && (
                 <p className="mt-2 text-xs font-mono text-slate-300">Signal reference · SL {price(analysis.suggestedSL)} · Target {price(analysis.suggestedTarget)}</p>
               )}

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { PaperTrade } from '../types/paperTrading';
 import { calculatePaperPnl, closePaperTrade, isPaperTradingState } from './paperTrading';
+import { getSignalDirection } from './tradeSignals';
 
 const trade: PaperTrade = {
   id: 'paper-1',
@@ -46,4 +47,23 @@ test('paper trading persistence accepts valid states and rejects malformed trade
     allocationPercent: 5,
     trades: [{ ...trade, entryPrice: 0 }],
   }), false);
+});
+
+test('trade alerts preserve the signal direction for bearish scalps', () => {
+  assert.equal(getSignalDirection({
+    signalType: 'STOP_LOSS_HUNT_ENTRY',
+    actionAdvice: 'SMART MONEY BUY.',
+  }), 'LONG');
+  assert.equal(getSignalDirection({
+    signalType: 'SCALP_OPPORTUNITY',
+    actionAdvice: 'SCALP SHORT. Breakdown confirmed only with bearish consensus.',
+  }), 'SHORT');
+  assert.equal(getSignalDirection({
+    signalType: 'SCALP_OPPORTUNITY',
+    actionAdvice: 'SCALP LONG. Breakout confirmed only with bullish consensus.',
+  }), 'LONG');
+  assert.equal(getSignalDirection({
+    signalType: 'RETAIL_TRAP_BHEED',
+    actionAdvice: 'DO NOT CHASE.',
+  }), 'SHORT');
 });
