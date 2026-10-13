@@ -135,3 +135,26 @@ export async function fetchMarketStatus(
   }
   return data;
 }
+
+export async function submitMarketHistory(
+  symbol: string,
+  timeframe: keyof MultiTimeframeCandles,
+  candles: Candle[]
+): Promise<void> {
+  const response = await fetch(backendApiUrl('/api/market-history'), {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ symbol, timeframe, candles }),
+    signal: AbortSignal.timeout(12_000),
+  });
+  if (!response.ok) {
+    const body: unknown = await response.json().catch(() => null);
+    const message = isRecord(body) && typeof body.error === 'string'
+      ? body.error
+      : `HTTP ${response.status}`;
+    throw new Error(`Backend candle sync failed for ${symbol} ${timeframe}: ${message}`);
+  }
+}

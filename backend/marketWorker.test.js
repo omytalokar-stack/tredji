@@ -81,6 +81,88 @@ test('worker exposes a warming-up snapshot before history is loaded', () => {
   assert.deepEqual(Object.keys(snapshot.symbols[0].candles), ['1m', '5m', '15m']);
 });
 
+test('worker accepts only complete, chronological browser candle histories', () => {
+  const worker = createMarketWorker({ symbols: ['BTCUSDT'] });
+
+  for (const timeframe of ['1m', '5m', '15m']) {
+    const interval = durations[timeframe];
+    const latestOpenTime = Math.floor(Date.now() / interval) * interval;
+    const history = makeCandles(timeframe).map((candle, index) => ({
+      ...candle,
+      openTime: latestOpenTime - (99 - index) * interval,
+      closeTime: latestOpenTime - (99 - index) * interval + interval - 1,
+    }));
+    const result = worker.ingestHistory('BTCUSDT', timeframe, history);
+    assert.equal(result.candleCount, 100);
+    assert.equal(result.analysisReady, false);
+    assert.equal(worker.getSnapshot().symbols[0].candles[timeframe].length, 100);
+  }
+
+  assert.throws(() => worker.ingestHistory('ETHUSDT', '1m', makeCandles('1m')), /not in the active watchlist/);
+  assert.throws(() => worker.ingestHistory('BTCUSDT', '1h', makeCandles('1m')), /Timeframe/);
+  assert.throws(() => worker.ingestHistory('BTCUSDT', '1m', makeCandles('1m').slice(0, 99)), /100-120/);
+});
+
+test('browser histories produce real backend readiness when a live ticker is available', async () => {
+  let socket;
+  class CapturedWebSocket extends EventEmitter {
+    constructor() {
+      super();
+      socket = this;
+    }
+
+    close() {}
+  }
+  const worker = createMarketWorker({
+    symbols: ['BTCUSDT'],
+    WebSocketImpl: CapturedWebSocket,
+    bootstrapRetryBaseMs: 20,
+    bootstrapRetryMaxMs: 20,
+    logger: { error: () => {} },
+    requestMarketData: async () => {
+      throw new Error('REST history unavailable');
+    },
+  });
+
+  worker.start();
+  socket.emit('open');
+  socket.emit('message', JSON.stringify({
+    data: {
+      e: '24hrTicker',
+      s: 'BTCUSDT',
+      c: '100',
+      P: '1',
+      h: '110',
+      l: '90',
+      v: '100',
+      q: '10000',
+    },
+  }));
+  for (const timeframe of ['1m', '5m', '15m']) {
+    const interval = durations[timeframe];
+    const latestOpenTime = Math.floor(Date.now() / interval) * interval;
+    const history = makeCandles(timeframe).map((candle, index) => ({
+      ...candle,
+      openTime: latestOpenTime - (99 - index) * interval,
+      closeTime: latestOpenTime - (99 - index) * interval + interval - 1,
+    }));
+    worker.ingestHistory('BTCUSDT', timeframe, history);
+  }
+
+  try {
+    await waitFor(() => worker.getSnapshot().status === 'live' && worker.getSnapshot().lastError === null);
+    const snapshot = worker.getSnapshot();
+    assert.equal(snapshot.readySymbols, 1);
+    assert.equal(snapshot.streamConnected, true);
+    assert.ok(snapshot.symbols[0].analysis);
+    for (const timeframe of ['1m', '5m', '15m']) {
+      assert.equal(snapshot.symbols[0].candles[timeframe].length, 100);
+    }
+  } finally {
+    worker.stop();
+  }
+});
+
 test('worker syncs its active watchlist, retains shared symbols, and ignores unchanged lists', () => {
   const worker = createMarketWorker({ symbols: ['BTCUSDT', 'ETHUSDT'] });
   const initialEthCandles = worker.getSnapshot().symbols[1].candles;

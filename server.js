@@ -23,7 +23,7 @@ const allowedOrigins = [
 ];
 
 app.use(cors({ origin: allowedOrigins }));
-app.use(express.json({ limit: '16kb' }));
+app.use(express.json({ limit: '128kb' }));
 
 const pushNotifications = await createPushNotifications();
 if (!pushNotifications.enabled) {
@@ -65,6 +65,24 @@ app.get('/api/market-status', (req, res) => {
   }
   res.set('Cache-Control', 'no-store');
   return res.json(marketWorker.getSnapshot());
+});
+
+app.post('/api/market-history', (req, res) => {
+  const { symbol, timeframe, candles } = req.body ?? {};
+  if (typeof symbol !== 'string' || typeof timeframe !== 'string') {
+    return res.status(400).json({ error: 'Provide a symbol, timeframe, and candle history.' });
+  }
+  try {
+    const result = marketWorker.ingestHistory(symbol.trim().toUpperCase(), timeframe, candles);
+    res.set('Cache-Control', 'no-store');
+    return res.json(result);
+  } catch (error) {
+    if (error instanceof TypeError) {
+      return res.status(400).json({ error: error.message });
+    }
+    console.error('Unable to accept browser-fetched Binance candle history:', error);
+    return res.status(500).json({ error: 'Unable to accept candle history.' });
+  }
 });
 
 app.get('/api/push/public-key', (_req, res) => {

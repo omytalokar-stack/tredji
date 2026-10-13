@@ -16,6 +16,7 @@ import { WebSocket } from 'ws';
 const DEFAULT_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT'];
 const TIMEFRAMES = ['1m', '5m', '15m'];
 const CANDLE_LIMIT = 120;
+const MIN_HISTORY_COUNT = 100;
 const BASELINE_COUNT = 20;
 const SUPPORT_COUNT = 15;
 const REQUIRED_COUNT = 100;
@@ -167,6 +168,54 @@ function finiteCandles(candles) {
     candle.high >= candle.low &&
     candle.volume >= 0
   );
+}
+
+function validateHistoryCandles(timeframe, candles) {
+  const intervalMs = { '1m': 60_000, '5m': 5 * 60_000, '15m': 15 * 60_000 }[timeframe];
+  if (!Array.isArray(candles) || candles.length < MIN_HISTORY_COUNT || candles.length > CANDLE_LIMIT) {
+    throw new TypeError(`Provide 100-${CANDLE_LIMIT} ${timeframe} candles.`);
+  }
+
+  const now = Date.now();
+  let previousOpenTime = -1;
+  for (const candle of candles) {
+    if (
+      !candle ||
+      typeof candle !== 'object' ||
+      ![
+        candle.openTime,
+        candle.closeTime,
+        candle.open,
+        candle.high,
+        candle.low,
+        candle.close,
+        candle.volume,
+        candle.quoteVolume,
+        candle.takerBuyVolume,
+      ].every(Number.isFinite) ||
+      typeof candle.isClosed !== 'boolean' ||
+      candle.openTime <= previousOpenTime ||
+      candle.openTime % intervalMs !== 0 ||
+      (previousOpenTime !== -1 && candle.openTime !== previousOpenTime + intervalMs) ||
+      candle.openTime > now + 30_000 ||
+      candle.closeTime !== candle.openTime + intervalMs - 1 ||
+      candle.open <= 0 ||
+      candle.close <= 0 ||
+      candle.low <= 0 ||
+      candle.high < Math.max(candle.open, candle.close) ||
+      candle.low > Math.min(candle.open, candle.close) ||
+      candle.volume < 0 ||
+      candle.quoteVolume < 0 ||
+      candle.takerBuyVolume < 0 ||
+      candle.takerBuyVolume > candle.volume
+    ) {
+      throw new TypeError(`Invalid ${timeframe} candle history.`);
+    }
+    previousOpenTime = candle.openTime;
+  }
+  if (candles[candles.length - 1].openTime < now - 2 * intervalMs) {
+    throw new TypeError(`${timeframe} candle history is stale.`);
+  }
 }
 
 function latest(values) {
@@ -629,6 +678,31 @@ export function createMarketWorker({
     if (entry.ticker) publishUpdate(entry);
   };
 
+  const ingestHistory = (symbol, timeframe, candles) => {
+    if (!trackedSymbols.includes(symbol)) {
+      throw new TypeError(`Symbol ${symbol} is not in the active watchlist.`);
+    }
+    if (!TIMEFRAMES.includes(timeframe)) {
+      throw new TypeError('Timeframe must be 1m, 5m, or 15m.');
+    }
+    validateHistoryCandles(timeframe, candles);
+    const entry = market.get(symbol);
+    if (!entry) throw new Error(`Market state is unavailable for ${symbol}.`);
+    entry.candles[timeframe] = mergeCandles(entry.candles[timeframe], candles);
+    if (entry.bootstrapErrors) {
+      delete entry.bootstrapErrors[`klines ${timeframe}`];
+      entry.error = Object.values(entry.bootstrapErrors)[0] ?? null;
+      lastError = [...market.values()].find((item) => item.error)?.error ?? null;
+    }
+    publishUpdate(entry);
+    return {
+      symbol,
+      timeframe,
+      candleCount: entry.candles[timeframe].length,
+      analysisReady: entry.analysis !== null,
+    };
+  };
+
   const bootstrap = () => {
     bootstrapController?.abort();
     if (stopped) return;
@@ -641,9 +715,19 @@ export function createMarketWorker({
       !stopped &&
       generation === watchlistGeneration;
 
-    const retryUntilSuccess = async (symbol, resource, operation) => {
+    const retryUntilSuccess = async (symbol, resource, operation, isSatisfied = () => false) => {
       let attempt = 0;
       while (isCurrent()) {
+        if (isSatisfied()) {
+          const entry = market.get(symbol);
+          if (entry?.bootstrapErrors) {
+            delete entry.bootstrapErrors[resource];
+            entry.error = Object.values(entry.bootstrapErrors)[0] ?? null;
+            lastError = [...market.values()].find((item) => item.error)?.error ?? null;
+            onStatus();
+          }
+          return true;
+        }
         try {
           await operation();
           if (!isCurrent()) return false;
@@ -693,7 +777,8 @@ export function createMarketWorker({
           const succeeded = await retryUntilSuccess(
             symbol,
             `klines ${timeframe}`,
-            () => fetchKlines(symbol, timeframe, generation, controller.signal)
+            () => fetchKlines(symbol, timeframe, generation, controller.signal),
+            () => (market.get(symbol)?.candles[timeframe].length ?? 0) >= REQUIRED_COUNT
           );
           if (!succeeded) return;
           try {
@@ -727,7 +812,7 @@ export function createMarketWorker({
             throw new Error(`Binance returned an invalid 24hr ticker for ${symbol}.`);
           }
           publishUpdate(entry);
-        });
+        }, () => entry.ticker !== null);
         if (tickerSucceeded) {
           try {
             await delayWithSignal(150, controller.signal);
@@ -847,6 +932,7 @@ export function createMarketWorker({
     try {
       for (const symbol of [...trackedSymbols]) {
         if (stopped || generation !== watchlistGeneration) return;
+        if ((market.get(symbol)?.candles[timeframe].length ?? 0) >= REQUIRED_COUNT) continue;
         try {
           await fetchKlines(symbol, timeframe, generation);
           await delay(150);
@@ -961,7 +1047,7 @@ export function createMarketWorker({
     return true;
   }
 
-  return { start, stop, getSnapshot, setSymbols };
+  return { start, stop, getSnapshot, ingestHistory, setSymbols };
 }
 
 export { makeAnalysis, readSymbols };

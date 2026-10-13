@@ -6,7 +6,7 @@
  */
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { fetchLiveKlines } from './services/binanceApi';
-import { fetchMarketStatus, MarketStatusSnapshot } from './services/marketStatusApi';
+import { fetchMarketStatus, MarketStatusSnapshot, submitMarketHistory } from './services/marketStatusApi';
 import { fetchPushPublicKey, subscribeForPush, unsubscribeFromPush } from './services/pushNotifications';
 import { analyzeMarketTrap } from './utils/trapEngine';
 import { getSignalDirection } from './utils/tradeSignals';
@@ -573,7 +573,7 @@ export default function App() {
     }
   }, [selectedCoins, activeSymbol]);
 
-  // Bootstrap four timeframes once per selection; sequential requests avoid bursts.
+  // Bootstrap all analysis timeframes once per selection; sequential requests avoid bursts.
   useEffect(() => {
     let isCancelled = false;
 
@@ -593,6 +593,9 @@ export default function App() {
                   [timeframe]: mergeCandles(current[timeframe], incoming),
                 },
               };
+            });
+            void submitMarketHistory(symbol, timeframe, incoming).catch((error) => {
+              console.warn(`Unable to sync Binance ${timeframe} candles to the backend for ${symbol}.`, error);
             });
           } catch (error) {
             console.warn(`Unable to load Binance ${timeframe} candles for ${symbol}.`, error);
@@ -630,6 +633,9 @@ export default function App() {
                   [timeframe]: mergeCandles(current[timeframe], incoming),
                 },
               };
+            });
+            void submitMarketHistory(symbol, timeframe, incoming).catch((error) => {
+              console.warn(`Unable to sync Binance ${timeframe} candles to the backend for ${symbol}.`, error);
             });
           } catch (error) {
             console.warn(`Unable to refresh Binance ${timeframe} candles for ${symbol}.`, error);
