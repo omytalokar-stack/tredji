@@ -577,6 +577,29 @@ export default function App() {
   useEffect(() => {
     let isCancelled = false;
 
+    const syncBrowserHistory = async (
+      symbol: string,
+      timeframe: Timeframe,
+      candles: Candle[]
+    ) => {
+      let attempt = 0;
+      while (!isCancelled) {
+        try {
+          await submitMarketHistory(symbol, timeframe, candles);
+          return;
+        } catch (error) {
+          if (isCancelled) return;
+          const retryDelay = Math.min(1000 * (2 ** Math.min(attempt, 5)), 30_000);
+          attempt += 1;
+          console.warn(
+            `Unable to sync Binance ${timeframe} candles to the backend for ${symbol}; retrying in ${retryDelay}ms.`,
+            error
+          );
+          await new Promise((resolve) => window.setTimeout(resolve, retryDelay));
+        }
+      }
+    };
+
     async function loadInitialCandles() {
       for (const symbol of selectedCoins) {
         for (const timeframe of TIMEFRAMES) {
@@ -594,9 +617,7 @@ export default function App() {
                 },
               };
             });
-            void submitMarketHistory(symbol, timeframe, incoming).catch((error) => {
-              console.warn(`Unable to sync Binance ${timeframe} candles to the backend for ${symbol}.`, error);
-            });
+            void syncBrowserHistory(symbol, timeframe, incoming);
           } catch (error) {
             console.warn(`Unable to load Binance ${timeframe} candles for ${symbol}.`, error);
           }
@@ -633,9 +654,6 @@ export default function App() {
                   [timeframe]: mergeCandles(current[timeframe], incoming),
                 },
               };
-            });
-            void submitMarketHistory(symbol, timeframe, incoming).catch((error) => {
-              console.warn(`Unable to sync Binance ${timeframe} candles to the backend for ${symbol}.`, error);
             });
           } catch (error) {
             console.warn(`Unable to refresh Binance ${timeframe} candles for ${symbol}.`, error);
