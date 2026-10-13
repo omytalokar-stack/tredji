@@ -59,11 +59,11 @@ Frontend मधील मुख्य REST helper public Binance hosts मध्
 `server.js` Express API सुरू करतो आणि HTTP server ऐकू लागल्यावर market worker start करतो. `backend/marketWorker.js`:
 
 - Default ने पाच USDT symbols track करतो; `TRACKED_SYMBOLS` ने 1–5 symbols configure करता येतात.
-- Startup वेळी प्रत्येक symbol साठी चार timeframe चा market history bootstrap करतो.
+- Startup वेळी प्रत्येक symbol साठी `1m`, `5m`, `15m` मधील 100 candles क्रमाने bootstrap करतो; symbols/REST requests एकाच वेळी न पाठवल्यामुळे request burst कमी होतो.
 - Binance ticker/kline WebSocket update वर in-memory candle, ticker आणि analysis snapshot refresh करतो.
 - `GET /api/market-status` द्वारे हा snapshot frontend ला देतो; response no-cache आहे.
 - `15m` history स्थिर 15-मिनट interval वर refresh करते.
-- REST वर Binance `418`/`429` rate-limit response आल्यास ठरावीक काळ REST request थांबवतो.
+- आधी Binance public market-data mirror वापरतो आणि REST requests serialize करतो. Binance `418`/`429` दिल्यास `Retry-After` किंवा ban-expiry timestamp पर्यंत requests थांबवतो.
 - Backend market state RAM मध्ये आहे; process restart झाल्यावर market history पुन्हा bootstrap होते.
 
 Frontend दर पाच सेकंदांनी backend polling करताना selected symbols `GET /api/market-status?symbols=...` मधून पाठवतो. Backend 1–5 USDT symbols validate करून सूची बदलल्यास worker ची WebSocket stream आणि bootstrap नव्या watchlist साठी पुन्हा सुरू करतो. समान यादी आल्यास worker reconnect/bootstrap करत नाही. `TRACKED_SYMBOLS` ही initial/default यादी आणि query न पाठवणाऱ्या clients साठी fallback आहे. `GET /api/health` छोटा worker-status response देतो आणि watchlist बदलत नाही.

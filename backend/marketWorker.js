@@ -20,12 +20,13 @@ const BASELINE_COUNT = 20;
 const SUPPORT_COUNT = 15;
 const REQUIRED_COUNT = 100;
 const BINANCE_REST_BASES = [
-  'https://api.binance.com/api/v3',
   'https://data-api.binance.vision/api/v3',
+  'https://api.binance.com/api/v3',
   'https://api1.binance.com/api/v3',
   'https://api3.binance.com/api/v3',
 ];
 let binanceRateLimitUntil = 0;
+let binanceRequestQueue = Promise.resolve();
 
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 const emptyTimeframes = () => ({ '1m': [], '5m': [], '15m': [] });
@@ -108,41 +109,54 @@ async function delayWithSignal(milliseconds, signal) {
 }
 
 async function fetchBinance(path, signal) {
-  const waitMs = binanceRateLimitUntil - Date.now();
-  if (waitMs > 0) await delayWithSignal(waitMs, signal);
-  let lastError;
-  for (const base of BINANCE_REST_BASES) {
-    if (signal?.aborted) throw new Error('Binance REST request cancelled.');
-    try {
-      return (await axios.get(`${base}${path}`, {
-        timeout: 12_000,
-        signal,
-        headers: { Accept: 'application/json' },
-      })).data;
-    } catch (error) {
+  const request = binanceRequestQueue.then(async () => {
+    const waitMs = binanceRateLimitUntil - Date.now();
+    if (waitMs > 0) await delayWithSignal(waitMs, signal);
+    let lastError;
+    for (const base of BINANCE_REST_BASES) {
       if (signal?.aborted) throw new Error('Binance REST request cancelled.');
-      lastError = error;
-      const status = error?.response?.status;
-      if (status === 418 || status === 429) {
-        const retryAfter = Number(error.response.headers?.['retry-after']);
-        binanceRateLimitUntil = Date.now() + (Number.isFinite(retryAfter) && retryAfter > 0
-          ? retryAfter * 1000
-          : 60_000);
-        const responseMessage = typeof error.response.data?.msg === 'string'
-          ? `: ${error.response.data.msg}`
-          : '';
-        throw new Error(`Binance rate limit response HTTP ${status}${responseMessage}; REST refresh paused.`);
+      try {
+        return (await axios.get(`${base}${path}`, {
+          timeout: 12_000,
+          signal,
+          headers: { Accept: 'application/json' },
+        })).data;
+      } catch (error) {
+        if (signal?.aborted) throw new Error('Binance REST request cancelled.');
+        lastError = error;
+        const status = error?.response?.status;
+        if (status === 418 || status === 429) {
+          const now = Date.now();
+          const retryAfter = Number(error.response.headers?.['retry-after']);
+          const retryAfterMs = Number.isFinite(retryAfter) && retryAfter > 0
+            ? retryAfter * 1000
+            : 0;
+          const responseMessage = typeof error.response.data?.msg === 'string'
+            ? error.response.data.msg
+            : '';
+          const banUntil = Number(responseMessage.match(/banned until (\d+)/i)?.[1]);
+          binanceRateLimitUntil = Math.max(
+            now + retryAfterMs,
+            Number.isFinite(banUntil) && banUntil > now ? banUntil : 0,
+            now + (retryAfterMs ? 0 : 60_000)
+          );
+          throw new Error(
+            `Binance rate limit response HTTP ${status}${responseMessage ? `: ${responseMessage}` : ''}; REST refresh paused until ${new Date(binanceRateLimitUntil).toISOString()}.`
+          );
+        }
       }
     }
-  }
-  const status = lastError?.response?.status;
-  const responseMessage = lastError?.response?.data?.msg;
-  const details = status
-    ? `HTTP ${status}${responseMessage ? `: ${responseMessage}` : ''}`
-    : lastError?.code
-      ? `${lastError.code}: ${lastError.message}`
-      : lastError?.message ?? 'unknown error';
-  throw new Error(`Unable to fetch Binance public market data: ${details}`);
+    const status = lastError?.response?.status;
+    const responseMessage = lastError?.response?.data?.msg;
+    const details = status
+      ? `HTTP ${status}${responseMessage ? `: ${responseMessage}` : ''}`
+      : lastError?.code
+        ? `${lastError.code}: ${lastError.message}`
+        : lastError?.message ?? 'unknown error';
+    throw new Error(`Unable to fetch Binance public market data: ${details}`);
+  });
+  binanceRequestQueue = request.catch(() => {});
+  return request;
 }
 
 function finiteCandles(candles) {
@@ -669,59 +683,61 @@ export function createMarketWorker({
       return false;
     };
 
-    return Promise.all(symbolsToBootstrap.map(async (symbol) => {
-      const entry = market.get(symbol);
-      if (!entry) return;
-      for (const timeframe of TIMEFRAMES) {
+    return (async () => {
+      for (const symbol of symbolsToBootstrap) {
         if (!isCurrent()) return;
-        const succeeded = await retryUntilSuccess(
-          symbol,
-          `klines ${timeframe}`,
-          () => fetchKlines(symbol, timeframe, generation, controller.signal)
-        );
-        if (!succeeded) return;
-        try {
-          await delayWithSignal(150, controller.signal);
-        } catch {
-          return;
+        const entry = market.get(symbol);
+        if (!entry) continue;
+        for (const timeframe of TIMEFRAMES) {
+          if (!isCurrent()) return;
+          const succeeded = await retryUntilSuccess(
+            symbol,
+            `klines ${timeframe}`,
+            () => fetchKlines(symbol, timeframe, generation, controller.signal)
+          );
+          if (!succeeded) return;
+          try {
+            await delayWithSignal(150, controller.signal);
+          } catch {
+            return;
+          }
+        }
+        if (!isCurrent()) return;
+        const tickerSucceeded = await retryUntilSuccess(symbol, '24hr ticker', async () => {
+          const data = await requestMarketData(
+            `/ticker/24hr?symbol=${encodeURIComponent(symbol)}`,
+            { signal: controller.signal }
+          );
+          if (!isCurrent()) return;
+          entry.ticker = {
+            symbol,
+            baseAsset: symbol.replace(/USDT$/, ''),
+            quoteAsset: 'USDT',
+            price: Number(data.lastPrice),
+            priceChangePercent: Number(data.priceChangePercent),
+            high24h: Number(data.highPrice),
+            low24h: Number(data.lowPrice),
+            volume24h: Number(data.volume),
+            quoteVolume24h: Number(data.quoteVolume),
+            lastUpdated: Date.now(),
+          };
+          if (Object.values(entry.ticker).some((value) =>
+            typeof value === 'number' && !Number.isFinite(value)
+          )) {
+            throw new Error(`Binance returned an invalid 24hr ticker for ${symbol}.`);
+          }
+          publishUpdate(entry);
+        });
+        if (tickerSucceeded) {
+          try {
+            await delayWithSignal(150, controller.signal);
+          } catch {
+            return;
+          }
         }
       }
-      if (!isCurrent()) return;
-      const tickerSucceeded = await retryUntilSuccess(symbol, '24hr ticker', async () => {
-        const data = await requestMarketData(
-          `/ticker/24hr?symbol=${encodeURIComponent(symbol)}`,
-          { signal: controller.signal }
-        );
-        if (!isCurrent()) return;
-        entry.ticker = {
-          symbol,
-          baseAsset: symbol.replace(/USDT$/, ''),
-          quoteAsset: 'USDT',
-          price: Number(data.lastPrice),
-          priceChangePercent: Number(data.priceChangePercent),
-          high24h: Number(data.highPrice),
-          low24h: Number(data.lowPrice),
-          volume24h: Number(data.volume),
-          quoteVolume24h: Number(data.quoteVolume),
-          lastUpdated: Date.now(),
-        };
-        if (Object.values(entry.ticker).some((value) =>
-          typeof value === 'number' && !Number.isFinite(value)
-        )) {
-          throw new Error(`Binance returned an invalid 24hr ticker for ${symbol}.`);
-        }
-        publishUpdate(entry);
-      });
-      if (tickerSucceeded) {
-        try {
-          await delayWithSignal(150, controller.signal);
-        } catch {
-          return;
-        }
-      }
-    })).then(() => {
       if (isCurrent()) onStatus();
-    });
+    })();
   };
 
   const scheduleReconnect = () => {

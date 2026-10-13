@@ -140,6 +140,48 @@ test('worker retries failed history, logs the exact error, and resumes signal an
   worker.stop();
 });
 
+test('worker bootstraps each symbol sequentially and loads all 100 candles per timeframe', async () => {
+  let activeRequests = 0;
+  let maxActiveRequests = 0;
+  const worker = createMarketWorker({
+    symbols: ['BTCUSDT', 'ETHUSDT'],
+    WebSocketImpl: FakeWebSocket,
+    logger: { error: () => {} },
+    requestMarketData: async (path) => {
+      activeRequests += 1;
+      maxActiveRequests = Math.max(maxActiveRequests, activeRequests);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      activeRequests -= 1;
+      if (path.includes('/klines?')) {
+        const timeframe = new URLSearchParams(path.split('?')[1]).get('interval');
+        return makeBinanceRows(timeframe);
+      }
+      return {
+        lastPrice: '100',
+        priceChangePercent: '1',
+        highPrice: '110',
+        lowPrice: '90',
+        volume: '100',
+        quoteVolume: '10000',
+      };
+    },
+  });
+
+  worker.start();
+  await waitFor(() => worker.getSnapshot().readySymbols === 2, 4_000);
+
+  const snapshot = worker.getSnapshot();
+  assert.equal(maxActiveRequests, 1);
+  for (const symbol of snapshot.symbols) {
+    for (const timeframe of ['1m', '5m', '15m']) {
+      assert.equal(symbol.candles[timeframe].length, 100);
+    }
+    assert.ok(symbol.analysis);
+    assert.equal(symbol.error, null);
+  }
+  worker.stop();
+});
+
 test('worker cancels pending bootstrap retries when stopped or watchlist changes', async () => {
   let calls = 0;
   const worker = createMarketWorker({
