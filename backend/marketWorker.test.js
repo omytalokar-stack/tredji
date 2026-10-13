@@ -7,8 +7,7 @@ import { createMarketWorker, createSignalNotifier, makeAnalysis } from './market
 const durations = {
   '1m': 60_000,
   '5m': 5 * 60_000,
-  '1h': 60 * 60_000,
-  '4h': 4 * 60 * 60_000,
+  '15m': 15 * 60_000,
 };
 
 function makeCandles(timeframe, trend = 'UP') {
@@ -79,7 +78,7 @@ test('worker exposes a warming-up snapshot before history is loaded', () => {
   assert.equal(snapshot.readySymbols, 0);
   assert.equal(snapshot.streamConnected, false);
   assert.equal(snapshot.symbols[0].analysis, null);
-  assert.deepEqual(Object.keys(snapshot.symbols[0].candles), ['1m', '5m', '1h', '4h']);
+  assert.deepEqual(Object.keys(snapshot.symbols[0].candles), ['1m', '5m', '15m']);
 });
 
 test('worker syncs its active watchlist, retains shared symbols, and ignores unchanged lists', () => {
@@ -169,8 +168,7 @@ test('server engine computes all ten LTF indicator votes and an MTF signal', () 
   const candles = {
     '1m': makeCandles('1m'),
     '5m': makeCandles('5m'),
-    '1h': makeCandles('1h'),
-    '4h': makeCandles('4h'),
+    '15m': makeCandles('15m'),
   };
   const analysis = makeAnalysis(makeTicker(), candles);
   assert.ok(analysis);
@@ -197,8 +195,7 @@ test('server engine calculates a 1:2 LONG plan for a stop-loss hunt signal', () 
   const candles = {
     '1m': makeCandles('1m', 'DOWN'),
     '5m': makeCandles('5m', 'DOWN'),
-    '1h': makeCandles('1h', 'UP'),
-    '4h': makeCandles('4h', 'UP'),
+    '15m': makeCandles('15m', 'UP'),
   };
   const oneMinute = candles['1m'];
   const support = Math.min(...oneMinute.slice(-16, -1).map((candle) => candle.low));
@@ -229,8 +226,7 @@ test('server engine blocks analysis when any timeframe is short of 100 candles',
   const candles = {
     '1m': makeCandles('1m'),
     '5m': makeCandles('5m'),
-    '1h': makeCandles('1h'),
-    '4h': makeCandles('4h').slice(1),
+    '15m': makeCandles('15m').slice(1),
   };
   assert.equal(makeAnalysis(makeTicker(), candles), null);
 });

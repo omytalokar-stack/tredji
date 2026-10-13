@@ -40,7 +40,7 @@ function isCandle(value: unknown): value is Candle {
 
 function isCandles(value: unknown): value is MultiTimeframeCandles {
   return isRecord(value) &&
-    ['1m', '5m', '1h', '4h'].every((timeframe) =>
+    ['1m', '5m', '15m'].every((timeframe) =>
       Array.isArray(value[timeframe]) && value[timeframe].every(isCandle)
     );
 }
@@ -59,7 +59,7 @@ function isDirection(value: unknown): value is IndicatorDirection {
 }
 
 function isAnalysis(value: unknown): value is TrapAnalysis {
-  const signalTypes = ['RETAIL_TRAP_BHEED', 'STOP_LOSS_HUNT_ENTRY', 'FAKE_BREAKOUT', 'NEUTRAL_SCANNING'];
+  const signalTypes = ['RETAIL_TRAP_BHEED', 'STOP_LOSS_HUNT_ENTRY', 'FAKE_BREAKOUT', 'SCALP_OPPORTUNITY', 'NEUTRAL_SCANNING'];
   const trends = ['BULLISH', 'BEARISH', 'NEUTRAL'];
   const sentiments = ['EXTREME BULLISH', 'EXTREME BEARISH', 'MIXED'];
   return isRecord(value) &&

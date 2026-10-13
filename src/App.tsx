@@ -34,7 +34,7 @@ import { ShieldAlert, Target, AlertOctagon, HelpCircle, ChevronDown, ChevronUp, 
 const MAX_COINS = 5;
 const STORAGE_KEY = 'trapdetector_selected_coins_v3';
 const INITIAL_COINS = ['btcusdt', 'ethusdt', 'bnbusdt', 'solusdt', 'xrpusdt'];
-const TIMEFRAMES: Timeframe[] = ['1m', '5m', '1h', '4h'];
+const TIMEFRAMES: Timeframe[] = ['1m', '5m', '15m'];
 const CANDLE_HISTORY_LIMIT = 120;
 const ALERT_PREFERENCES_KEY = 'trapdetector_alert_preferences_v1';
 const DEFAULT_ALERT_PREFERENCES: AlertPreferences = {
@@ -63,7 +63,7 @@ function readAlertPreferences(): AlertPreferences {
 }
 
 function emptyTimeframes(): MultiTimeframeCandles {
-  return { '1m': [], '5m': [], '1h': [], '4h': [] };
+  return { '1m': [], '5m': [], '15m': [] };
 }
 
 function mergeCandles(existing: Candle[], incoming: Candle[]): Candle[] {
@@ -146,6 +146,11 @@ export default function App() {
   const [lastStreamTick, setLastStreamTick] = useState<number>(0);
   const [serverAnalyses, setServerAnalyses] = useState<Record<string, TrapAnalysis>>({});
   const [marketWorkerStatus, setMarketWorkerStatus] = useState<MarketStatusSnapshot['status'] | 'offline'>('warming_up');
+  const [marketStatus, setMarketStatus] = useState<{ status: 'active' | 'warming_up'; readySymbols: number; lastError: string | null }>({
+    status: 'warming_up',
+    readySymbols: 0,
+    lastError: null,
+  });
   const [hasServerMarketData, setHasServerMarketData] = useState(false);
 
   // Modals & Drawers
@@ -421,6 +426,11 @@ export default function App() {
         const snapshot = await fetchMarketStatus(selectedCoins, activeRequest.signal);
         if (isCancelled) return;
         setMarketWorkerStatus(snapshot.status);
+        setMarketStatus({
+          status: snapshot.status === 'live' ? 'active' : 'warming_up',
+          readySymbols: snapshot.readySymbols,
+          lastError: snapshot.lastError,
+        });
         setHasServerMarketData(snapshot.symbols.some((item) => item.ticker !== null));
         if (snapshot.updatedAt) setLastStreamTick(snapshot.updatedAt);
         const nextAnalyses: Record<string, TrapAnalysis> = {};
@@ -440,8 +450,7 @@ export default function App() {
             merged[symbol] = {
               '1m': mergeCandles(existing['1m'], incoming['1m']),
               '5m': mergeCandles(existing['5m'], incoming['5m']),
-              '1h': mergeCandles(existing['1h'], incoming['1h']),
-              '4h': mergeCandles(existing['4h'], incoming['4h']),
+              '15m': mergeCandles(existing['15m'], incoming['15m']),
             };
           }
           return merged;
@@ -449,6 +458,11 @@ export default function App() {
       } catch (error) {
         if (!isCancelled && !(error instanceof DOMException && error.name === 'AbortError')) {
           setMarketWorkerStatus('offline');
+          setMarketStatus({
+            status: 'warming_up',
+            readySymbols: 0,
+            lastError: error instanceof Error ? error.message : 'Unable to fetch backend market status.',
+          });
           console.warn('Unable to fetch backend market status; continuing with available live data.', error);
         }
       } finally {
@@ -581,7 +595,7 @@ export default function App() {
   useEffect(() => {
     let isCancelled = false;
     let refreshInProgress = false;
-    const refreshTimeframe = async (timeframe: '1h' | '4h') => {
+    const refreshTimeframe = async (timeframe: '15m') => {
       if (refreshInProgress || isCancelled) return;
       refreshInProgress = true;
       try {
@@ -608,19 +622,14 @@ export default function App() {
         refreshInProgress = false;
       }
     };
-    const oneHourTimer = window.setInterval(
-      () => void refreshTimeframe('1h'),
-      60 * 60 * 1000
-    );
-    const fourHourTimer = window.setInterval(
-      () => void refreshTimeframe('4h'),
-      4 * 60 * 60 * 1000
+    const fifteenMinuteTimer = window.setInterval(
+      () => void refreshTimeframe('15m'),
+      5 * 60 * 1000
     );
 
     return () => {
       isCancelled = true;
-      window.clearInterval(oneHourTimer);
-      window.clearInterval(fourHourTimer);
+      window.clearInterval(fifteenMinuteTimer);
     };
   }, [selectedCoins]);
 
@@ -925,8 +934,9 @@ export default function App() {
     const priority: Record<TrapAnalysis['signalType'], number> = {
       RETAIL_TRAP_BHEED: 0,
       STOP_LOSS_HUNT_ENTRY: 1,
-      FAKE_BREAKOUT: 2,
-      NEUTRAL_SCANNING: 3,
+      SCALP_OPPORTUNITY: 2,
+      FAKE_BREAKOUT: 3,
+      NEUTRAL_SCANNING: 4,
     };
     return Object.values(analyses).sort(
       (a, b) => priority[a.signalType] - priority[b.signalType]
@@ -991,6 +1001,7 @@ export default function App() {
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenProfile={() => navigateTo('profile')}
         isConnected={isLiveConnected}
+        marketStatus={marketStatus}
       />
 
       {/* Main Content Area */}
@@ -1090,7 +1101,7 @@ export default function App() {
                 <Target className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
                 <div>
                   <strong className="text-emerald-300 block">2. Stop-Loss Hunt Entries</strong>
-                  Both the 1h and 4h close must be above EMA-50 and both lower-timeframe panels must reach at least 7/10 SELL votes. Then a completed 1m candle must sweep below the prior 15-candle low, reclaim it, form a lower wick over half its range, and trade over 1.5 times average volume. This pattern cannot identify who traded.
+                  The 15m close must remain above EMA-50, and both lower-timeframe panels must reach at least 7/10 SELL votes. Then a completed 1m candle must sweep below the prior 15-candle low, reclaim it, form a lower wick over half its range, and trade over 1.5 times average volume. This pattern cannot identify who traded.
                 </div>
               </div>
 
@@ -1098,11 +1109,11 @@ export default function App() {
                 <AlertOctagon className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
                 <div>
                   <strong className="text-amber-300 block">3. Volume &amp; Order Flow Confirmation</strong>
-                  With both 1h and 4h below EMA-50 and extreme bullish retail consensus on 1m/5m, a completed 1m candle that exceeds the prior 15-candle high on below-average volume is flagged. Alerts are rule-based observations, not trade guarantees.
+                  With the 15m trend below EMA-50 and extreme bullish retail consensus on 1m/5m, a completed 1m candle that exceeds the prior 15-candle high on below-average volume is flagged. Alerts are rule-based observations, not trade guarantees.
                 </div>
               </div>
               <p className="text-slate-400">
-                The engine loads 100 candles for each 1m, 5m, 1h, and 4h timeframe. 1m/5m update over WebSocket; 1h refreshes hourly and 4h refreshes every four hours. Until all four series have 100 candles and indicator calculations are available, the app shows &quot;Gathering 100-Candle MTF Data...&quot;.
+                The engine loads 100 candles for each 1m, 5m, and 15m timeframe. 1m/5m update over WebSocket; 15m refreshes on its own interval. Until all three series have 100 candles and indicator calculations are available, the app shows &quot;Gathering 100-Candle MTF Data...&quot;.
               </p>
             </div>
           )}
@@ -1118,7 +1129,9 @@ export default function App() {
             )}
             draft={tradeDraft ? {
               symbol: tradeDraft.symbol,
-              direction: tradeDraft.signalType === 'STOP_LOSS_HUNT_ENTRY' ? 'LONG' : 'SHORT',
+              direction: tradeDraft.signalType === 'STOP_LOSS_HUNT_ENTRY' || tradeDraft.signalType === 'SCALP_OPPORTUNITY'
+                ? 'LONG'
+                : 'SHORT',
               signalType: tradeDraft.signalType,
             } : null}
             analysis={tradeDraft ?? undefined}

@@ -40,7 +40,7 @@ export const MainTrapCard: React.FC<MainTrapCardProps> = ({
   if (!analysis) {
     return (
       <div className="w-full bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 text-center text-slate-400 md:col-span-2">
-        Gathering 100-Candle MTF Data... Signals stay blocked until all four Binance timeframes are ready.
+        Gathering 100-Candle MTF Data... Signals stay blocked until all three Binance timeframes are ready.
       </div>
     );
   }
@@ -158,7 +158,7 @@ export const MainTrapCard: React.FC<MainTrapCardProps> = ({
                   {analysis.badgeText}
                 </span>
                 <span className="text-xs font-mono text-slate-400">
-                  {analysis.baseAsset}/USDT · 1m/5m Indicators + 1h/4h Macro
+                  {analysis.baseAsset}/USDT · 1m/5m Indicators + 15m Macro
                 </span>
               </div>
               <h1 className="text-xl sm:text-2xl md:text-4xl font-extrabold tracking-tight mt-1 text-slate-100">
@@ -266,7 +266,7 @@ export const MainTrapCard: React.FC<MainTrapCardProps> = ({
           }`}>
             <div className="text-[11px] uppercase tracking-wider text-slate-400 font-mono">Higher-Timeframe Macro Trend</div>
             <div className="mt-1 text-lg font-bold text-slate-100">HTF Trend: {analysis.macroTrend}</div>
-            <div className="text-xs text-slate-300 mt-1">1h: {analysis.oneHourTrend} · 4h: {analysis.fourHourTrend} · EMA-50</div>
+            <div className="text-xs text-slate-300 mt-1">15m: {analysis.macroTrend} · EMA-50</div>
           </div>
           <div className="rounded-2xl border border-slate-800 bg-slate-950/80 p-4">
             <div className="text-[11px] uppercase tracking-wider text-slate-400 font-mono">Retail Consensus · 10 Indicators</div>

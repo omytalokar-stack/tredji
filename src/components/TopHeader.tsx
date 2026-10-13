@@ -6,6 +6,12 @@ import React from 'react';
 import { Search, Radio, Settings, UserRound } from 'lucide-react';
 import { CuteLogo } from './CuteLogo';
 
+interface BackendMarketStatus {
+  status: 'active' | 'warming_up';
+  readySymbols: number;
+  lastError: string | null;
+}
+
 interface TopHeaderProps {
   coinCount: number;
   maxCoins: number;
@@ -14,6 +20,7 @@ interface TopHeaderProps {
   onOpenSettings: () => void;
   onOpenProfile: () => void;
   isConnected: boolean;
+  marketStatus?: BackendMarketStatus | null;
 }
 
 export const TopHeader: React.FC<TopHeaderProps> = ({
@@ -24,7 +31,14 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
   onOpenSettings,
   onOpenProfile,
   isConnected,
+  marketStatus,
 }) => {
+  const backendStatusColor = marketStatus?.lastError
+    ? 'bg-rose-500'
+    : marketStatus?.status === 'active'
+      ? 'bg-emerald-500'
+      : 'bg-rose-500';
+  const backendStatusText = marketStatus?.lastError ? 'Retry' : null;
   return (
     <header className="sticky top-0 z-30 w-full bg-slate-950/90 backdrop-blur-md border-b border-slate-800/80 px-2 sm:px-6 lg:px-8 py-2.5 transition-all duration-300">
       <div className="max-w-7xl mx-auto flex items-center justify-between gap-2 sm:gap-6">
@@ -51,6 +65,23 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
               24/7 Live
             </span>
           </button>
+
+          <div
+            className="hidden sm:flex items-center gap-1.5 px-2 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-[11px] font-mono text-slate-300 shrink-0 min-h-[32px]"
+            title={marketStatus?.lastError
+              ? `Backend retrying: ${marketStatus.lastError}`
+              : marketStatus?.status === 'active'
+                ? `Backend ready: ${marketStatus.readySymbols} symbols online`
+                : 'Backend warming up'}
+          >
+            <span
+              className={`w-2 h-2 rounded-full ${backendStatusColor} ${marketStatus?.status === 'active' ? 'animate-pulse' : ''}`}
+              aria-label={marketStatus?.lastError ? 'Retrying backend data' : marketStatus?.status === 'active' ? 'Backend ready' : 'Backend warming up'}
+            />
+            {backendStatusText && (
+              <span className="text-[9px] uppercase tracking-wide text-rose-300">{backendStatusText}</span>
+            )}
+          </div>
 
           {/* Connection Live status indicator */}
           <div

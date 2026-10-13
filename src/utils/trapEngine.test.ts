@@ -17,8 +17,7 @@ function makeCandles(
   const intervalMs: Record<Timeframe, number> = {
     '1m': 60_000,
     '5m': 5 * 60_000,
-    '1h': 60 * 60_000,
-    '4h': 4 * 60 * 60_000,
+    '15m': 15 * 60_000,
   };
   return Array.from({ length: count }, (_, index) => {
     const close = 100 + index * 0.08 + Math.sin(index * 0.31) * 0.35 + closeOffset;
@@ -57,8 +56,7 @@ function makeTimeframes(): MultiTimeframeCandles {
   return {
     '1m': makeCandles('1m'),
     '5m': makeCandles('5m'),
-    '1h': makeCandles('1h'),
-    '4h': makeCandles('4h'),
+    '15m': makeCandles('15m'),
   };
 }
 
@@ -66,8 +64,7 @@ function makeTrendCandles(timeframe: Timeframe, trend: 'UP' | 'DOWN'): Candle[] 
   const interval: Record<Timeframe, number> = {
     '1m': 60_000,
     '5m': 5 * 60_000,
-    '1h': 60 * 60_000,
-    '4h': 4 * 60 * 60_000,
+    '15m': 15 * 60_000,
   };
   return Array.from({ length: 100 }, (_, index) => {
     const close = trend === 'UP' ? 50 + index * 0.5 : 150 - index * 0.5;
@@ -94,18 +91,17 @@ function makeTrendingTimeframes(
   return {
     '1m': makeTrendCandles('1m', lowerTrend),
     '5m': makeTrendCandles('5m', lowerTrend),
-    '1h': makeTrendCandles('1h', higherTrend),
-    '4h': makeTrendCandles('4h', higherTrend),
+    '15m': makeTrendCandles('15m', higherTrend),
   };
 }
 
-test('blocks analysis until all four timeframes have 100 candles', () => {
+test('blocks analysis until all three timeframes have 100 candles', () => {
   const candles = makeTimeframes();
-  candles['4h'] = makeCandles('4h', 99);
+  candles['15m'] = makeCandles('15m', 99);
   assert.equal(analyzeMarketTrap(makeTicker(), candles), null);
 });
 
-test('calculates ten indicators per lower timeframe and both EMA-50 macro trends', () => {
+test('calculates ten indicators per lower timeframe and the 15m EMA-50 macro filter', () => {
   const analysis = analyzeMarketTrap(makeTicker(), makeTimeframes());
 
   assert.ok(analysis);
@@ -125,11 +121,11 @@ test('does not create numeric confidence or trap scores', () => {
   assert.equal('confidence' in analysis, false);
 });
 
-test('does not report macro bullish when the hourly and four-hour trends disagree', () => {
+test('does not report 15m macro bullish when the 15m EMA-50 filter fails', () => {
   const candles = makeTimeframes();
-  const lastFourHourCandle = candles['4h'][candles['4h'].length - 1];
-  candles['4h'][candles['4h'].length - 1] = {
-    ...lastFourHourCandle,
+  const lastFifteenMinuteCandle = candles['15m'][candles['15m'].length - 1];
+  candles['15m'][candles['15m'].length - 1] = {
+    ...lastFifteenMinuteCandle,
     open: 70,
     high: 71,
     low: 69,
@@ -137,7 +133,7 @@ test('does not report macro bullish when the hourly and four-hour trends disagre
   };
 
   const analysis = analyzeMarketTrap(makeTicker(), candles);
-  assert.equal(analysis?.macroTrend, 'NEUTRAL');
+  assert.equal(analysis?.macroTrend, 'BEARISH');
 });
 
 test('detects stop-loss entry only with bullish macro and bearish lower-timeframe consensus', () => {

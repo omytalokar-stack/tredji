@@ -7,7 +7,7 @@
 
 ## 1. Executive summary
 
-TrapDetector AI is a React/TypeScript dashboard that consumes public Binance ticker and four timeframe kline series, then evaluates deterministic technical-indicator consensus and three 1m pattern rules. It does not use mock data, generate random values, compute synthetic trap/confidence scores, or place trades. If the app has not received 100 candles for each timeframe, it shows “Gathering 100-Candle MTF Data...”.
+TrapDetector AI is a React/TypeScript dashboard that consumes public Binance ticker and the active three-timeframe kline series (1m, 5m, 15m), then evaluates deterministic technical-indicator consensus and fast-entry scalping rules alongside the original pattern engine. It does not use mock data, generate random values, compute synthetic trap/confidence scores, or place trades. If the app has not received 100 candles for each timeframe, it shows “Gathering 100-Candle MTF Data...”.
 
 The repository also includes an Express proxy for a signed private Binance account request. The frontend dashboard currently does not call `/api/account`; account data is separate from the public market-data pipeline.
 
@@ -29,7 +29,7 @@ Despite the product name, the trap classifier is not a machine-learning or gener
 
 ### Backend market worker
 
-The Express process starts `backend/marketWorker.js` alongside the HTTP listener. It maintains a server-side watchlist (the five current defaults, or 1-5 Binance USDT symbols supplied through `TRACKED_SYMBOLS`), bootstraps 100 candles for each of `1m`, `5m`, `1h`, and `4h`, and listens to Binance ticker and kline streams for those markets. It calculates the same ten 1m/5m indicator votes, 1h/4h EMA-50 macro consensus, and prioritized trap rules on the backend. The worker retains the latest ticker, candles, analysis, and update/error state in memory; `GET /api/market-status` returns a no-cache snapshot. Higher-timeframe REST refreshes occur hourly and every four hours, while rate-limit responses pause subsequent REST requests.
+The Express process starts `backend/marketWorker.js` alongside the HTTP listener. It maintains a server-side watchlist (the five current defaults, or 1-5 Binance USDT symbols supplied through `TRACKED_SYMBOLS`), bootstraps 100 candles for each of `1m`, `5m`, and `15m`, and listens to Binance ticker and kline streams for those markets. It calculates the same ten 1m/5m indicator votes, uses the 15m EMA-50 as the macro trend filter, and adds the fast-entry `SCALP_OPPORTUNITY` rules without disturbing the legacy signal engine. The worker retains the latest ticker, candles, analysis, and update/error state in memory; `GET /api/market-status` returns a no-cache snapshot. The 15m series is refreshed on its own cadence while rate-limit responses pause subsequent REST requests.
 
 `App.tsx` polls the endpoint every five seconds and when the page is revisited. For symbols in the server watchlist it prefers the server-calculated analysis; the existing browser feed remains as a compatibility fallback and for the live ticker search. Backend state is process memory and is rebuilt after a Render restart; this is not durable storage. A continuously running Render instance is required for 24/7 collection—sleeping/free instances cannot keep a worker alive while suspended.
 
@@ -41,7 +41,7 @@ The active UI and browser-side fallback market-data orchestration are in [`src/A
 
 ### Historical candles and rate limits
 
-On selected-market changes, `App.tsx` loads 100 public Binance klines per symbol for 1m, 5m, 1h, and 4h. Initial REST calls are sequential; records are merged by open time and stored in a bounded 120-candle array per timeframe. The 1h series is refreshed every 60 minutes and the 4h series every four hours. A Binance HTTP 418/429 response is surfaced without trying alternate REST hosts, avoiding retries that could amplify a rate limit. Other network/HTTP failures can fall back across Binance REST mirrors.
+On selected-market changes, `App.tsx` loads 100 public Binance klines per symbol for 1m, 5m, and 15m. Initial REST calls are sequential; records are merged by open time and stored in a bounded 120-candle array per timeframe. The 15m series is refreshed on its own interval. A Binance HTTP 418/429 response is surfaced without trying alternate REST hosts, avoiding retries that could amplify a rate limit. Other network/HTTP failures can fall back across Binance REST mirrors.
 
 ### WebSocket streams
 
@@ -62,7 +62,7 @@ For each indicator, the engine calculates an independent BUY/SELL/NEUTRAL vote o
 
 Vote mapping is deterministic: RSI uses oversold (<30) and overbought (>70) with the 50 midpoint inside the range; MACD compares line with signal; EMA(20), EMA(50), and SMA(50) compare close to the average; Stochastic compares %K and %D; CCI uses its zero line; ADX requires ADX >=20 and compares +DI/-DI; Williams %R compares with -50; Bollinger Bands compare close with the middle band. These are implementation choices, not a calibrated measure of retail positioning.
 
-The 1h and 4h macro trends each compare the latest closed close with that timeframe's EMA-50. The combined macro is BULLISH only when both are above their EMA-50, BEARISH only when both are below, and NEUTRAL if they disagree or either is equal.
+The 15m macro trend compares the latest closed close with the 15m EMA-50. The combined macro is BULLISH while price stays above the EMA-50, BEARISH while price stays below it, and NEUTRAL when it sits on or around that level.
 
 Rules are checked in this order; first match wins. Fake Breakout is explicitly evaluated before Retail FOMO so it cannot be masked when both candle patterns match:
 

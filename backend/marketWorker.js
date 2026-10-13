@@ -14,7 +14,7 @@ import {
 import { WebSocket } from 'ws';
 
 const DEFAULT_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT'];
-const TIMEFRAMES = ['1m', '5m', '1h', '4h'];
+const TIMEFRAMES = ['1m', '5m', '15m'];
 const CANDLE_LIMIT = 120;
 const BASELINE_COUNT = 20;
 const SUPPORT_COUNT = 15;
@@ -28,7 +28,7 @@ const BINANCE_REST_BASES = [
 let binanceRateLimitUntil = 0;
 
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
-const emptyTimeframes = () => ({ '1m': [], '5m': [], '1h': [], '4h': [] });
+const emptyTimeframes = () => ({ '1m': [], '5m': [], '15m': [] });
 
 export function normalizeSymbols(inputSymbols) {
   if (!Array.isArray(inputSymbols) || inputSymbols.length < 1 || inputSymbols.length > 5) {
@@ -282,6 +282,26 @@ function getCombinedSentiment(oneMinute, fiveMinute) {
   };
 }
 
+function getStrongBullishConsensus(oneMinute, fiveMinute) {
+  return countDirection(oneMinute, 'BUY') >= 7 && countDirection(fiveMinute, 'BUY') >= 7;
+}
+
+function getStrongBearishConsensus(oneMinute, fiveMinute) {
+  return countDirection(oneMinute, 'SELL') >= 7 && countDirection(fiveMinute, 'SELL') >= 7;
+}
+
+function getBandState(candles) {
+  const closed = candles.filter((candle) => candle.isClosed);
+  const closes = closed.map((candle) => candle.close);
+  if (closes.length < 20) return null;
+  const bands = latest(BollingerBands.calculate({ period: 20, stdDev: 2, values: closes }));
+  if (!bands) return null;
+  const recent = closes.slice(-20);
+  const bandWidth = bands.upper - bands.lower;
+  const squeeze = bandWidth < (Math.max(...recent) - Math.min(...recent)) * 0.6;
+  return { upper: bands.upper, lower: bands.lower, squeeze };
+}
+
 function makeAnalysis(ticker, candles) {
   if (TIMEFRAMES.some((timeframe) =>
     candles[timeframe].length < REQUIRED_COUNT || !finiteCandles(candles[timeframe])
@@ -298,13 +318,10 @@ function makeAnalysis(ticker, candles) {
   const history = closedOneMinute.slice(-21, -1);
   if (!currentCandle || history.length !== BASELINE_COUNT) return null;
 
-  const oneHourTrend = macroTrend(candles['1h']);
-  const fourHourTrend = macroTrend(candles['4h']);
-  const macro = oneHourTrend === 'BULLISH' && fourHourTrend === 'BULLISH'
-    ? 'BULLISH'
-    : oneHourTrend === 'BEARISH' && fourHourTrend === 'BEARISH'
-      ? 'BEARISH'
-      : 'NEUTRAL';
+  const fifteenMinuteTrend = macroTrend(candles['15m']);
+  const oneHourTrend = fifteenMinuteTrend;
+  const fourHourTrend = fifteenMinuteTrend;
+  const macro = fifteenMinuteTrend;
   const consensus = getCombinedSentiment(oneMinute, fiveMinute);
   const names = [
     'RSI(14)', 'MACD(12,26,9)', 'EMA(20)', 'EMA(50)', 'SMA(50)',
@@ -337,6 +354,28 @@ function makeAnalysis(ticker, candles) {
   const volumePlateau = lastThree.length === 3 &&
     lastThree[0].volume >= lastThree[1].volume &&
     lastThree[1].volume >= lastThree[2].volume;
+  const closedFiveMinute = candles['5m'].filter((candle) => candle.isClosed).sort((first, second) => first.openTime - second.openTime);
+  const currentFiveMinute = latest(closedFiveMinute);
+  const fiveMinuteEMA50 = latest(EMA.calculate({
+    period: 50,
+    values: closedFiveMinute.map((candle) => candle.close),
+  }));
+  const fiveMinutePullbackTouch = currentFiveMinute && fiveMinuteEMA50 !== undefined &&
+    currentFiveMinute.close >= fiveMinuteEMA50 * 0.995 &&
+    currentFiveMinute.close <= fiveMinuteEMA50 * 1.005;
+  const goldenPullback = fifteenMinuteTrend === 'BULLISH' &&
+    fiveMinutePullbackTouch &&
+    getStrongBullishConsensus(oneMinute, fiveMinute) &&
+    volumeRatio > 1.5;
+  const bandState = getBandState(candles['1m']) ?? getBandState(candles['5m']);
+  const bullishBreakout = bandState && bandState.squeeze &&
+    currentCandle.close > bandState.upper &&
+    getStrongBullishConsensus(oneMinute, fiveMinute) &&
+    volumeRatio > 1.5;
+  const bearishBreakout = bandState && bandState.squeeze &&
+    currentCandle.close < bandState.lower &&
+    getStrongBearishConsensus(oneMinute, fiveMinute) &&
+    volumeRatio > 1.5;
   const base = {
     symbol: ticker.symbol,
     baseAsset: ticker.baseAsset,
@@ -360,6 +399,56 @@ function makeAnalysis(ticker, candles) {
     timestamp: Date.now(),
   };
 
+  if (goldenPullback) {
+    const riskLevels = calculateRiskLevels(candles['1m'], currentCandle.close, 'LONG');
+    if (!riskLevels) return null;
+    return {
+      ...base,
+      ...riskLevels,
+      signalType: 'SCALP_OPPORTUNITY',
+      severity: 'OPPORTUNITY',
+      badgeText: 'GOLDEN PULLBACK · 15M TREND',
+      headline: 'Golden Pullback. Fast bullish continuation setup.',
+      taglineHindi: '15m trend bullish, EMA-50 touch, and 1m/5m sentiment remains strong.',
+      actionAdvice: 'SCALP LONG ENTRY. Buy the pullback only if price holds the 15m EMA-50 and 1m/5m consensus remains positive.',
+      actionType: 'ENTRY',
+      beginnerExplanation: 'The 15m trend is bullish, price is pulling back to the EMA-50, and both 1m and 5m indicator panels show strong bullish consensus with a volume spike.',
+      detailedAnalysis: [
+        `15m trend: ${fifteenMinuteTrend}.`,
+        `1m/5m bullish consensus: ${countDirection(oneMinute, 'BUY')}/10 and ${countDirection(fiveMinute, 'BUY')}/10 BUY.`,
+        `1m volume is ${volumeRatio.toFixed(2)}x the prior 20-candle average.`,
+      ],
+    };
+  }
+
+  if (bullishBreakout || bearishBreakout) {
+    const riskLevels = calculateRiskLevels(candles['1m'], currentCandle.close, bullishBreakout ? 'LONG' : 'SHORT');
+    if (!riskLevels) return null;
+    return {
+      ...base,
+      ...riskLevels,
+      signalType: 'SCALP_OPPORTUNITY',
+      severity: 'OPPORTUNITY',
+      badgeText: 'BOLLINGER SQUEEZE · BREAKOUT',
+      headline: bullishBreakout ? 'Bollinger Squeeze Breakout. Bullish continuation.' : 'Bollinger Squeeze Breakout. Bearish continuation.',
+      taglineHindi: bullishBreakout
+        ? 'Bands are compressed and price is breaking out with strong volume on bullish momentum.'
+        : 'Bands are compressed and price is breaking down with strong volume on bearish momentum.',
+      actionAdvice: bullishBreakout
+        ? 'SCALP LONG. Breakout confirmed only with 1m/5m bullish consensus and elevated volume.'
+        : 'SCALP SHORT. Breakdown confirmed only with 1m/5m bearish consensus and elevated volume.',
+      actionType: 'ENTRY',
+      beginnerExplanation: 'The 1m and 5m bands are squeezed, price is clearing the range, and volume expands while 1m/5m consensus validates the breakout direction.',
+      detailedAnalysis: [
+        bullishBreakout
+          ? `Bullish breakout above the squeeze zone: ${bandState.upper.toLocaleString()}.`
+          : `Bearish breakdown below the squeeze zone: ${bandState.lower.toLocaleString()}.`,
+        `1m/5m strict consensus check passed: ${bullishBreakout ? 'BUY' : 'SELL'} across 7/10 indicator votes.`,
+        `Current 1m volume is ${volumeRatio.toFixed(2)}x the prior 20-candle average.`,
+      ],
+    };
+  }
+
   const supportSweep = currentCandle.low < recentSupport && currentCandle.close > recentSupport;
   if (
     macro === 'BULLISH' &&
@@ -380,9 +469,9 @@ function makeAnalysis(ticker, candles) {
       taglineHindi: 'Retail panic aur bullish higher-timeframe trend.',
       actionAdvice: 'SMART MONEY BUY. Rule conditions matched; this is not proof of trader identity or a guaranteed outcome.',
       actionType: 'ENTRY',
-      beginnerExplanation: 'Both 1h and 4h trends are bullish, both lower timeframes show extreme bearish indicator consensus, and the closed 1m candle swept and reclaimed support with a long lower wick and a volume spike.',
+      beginnerExplanation: 'The 15m trend is bullish, both lower timeframes show extreme bearish indicator consensus, and the closed 1m candle swept and reclaimed support with a long lower wick and a volume spike.',
       detailedAnalysis: [
-        `Macro trend: 1h ${oneHourTrend}, 4h ${fourHourTrend}.`,
+        `Macro trend: 15m ${oneHourTrend}.`,
         `Retail consensus: ${consensus.sellCount}/10 SELL on both 1m and 5m.`,
         `Support ${recentSupport.toLocaleString()}, wick ${(lowerWickRatio * 100).toFixed(1)}%, volume ${volumeRatio.toFixed(2)}x average.`,
       ],
@@ -446,7 +535,7 @@ function makeAnalysis(ticker, candles) {
     actionType: 'WATCH',
     beginnerExplanation: 'All ten indicators are calculated on both 1m and 5m data. A setup is shown only when the specified macro, consensus, and 1m candle rules align.',
     detailedAnalysis: [
-      `Macro trend: 1h ${oneHourTrend}, 4h ${fourHourTrend}.`,
+      `Macro trend: 15m ${oneHourTrend}.`,
       `Consensus: 1m ${countDirection(oneMinute, 'BUY')}/10 BUY, ${countDirection(oneMinute, 'SELL')}/10 SELL; 5m ${countDirection(fiveMinute, 'BUY')}/10 BUY, ${countDirection(fiveMinute, 'SELL')}/10 SELL.`,
       `1m signal volume: ${currentVolume.toLocaleString()} vs prior 20-candle average ${avgVolume20.toLocaleString()} (${volumeRatio.toFixed(2)}x).`,
     ],
@@ -493,8 +582,7 @@ export function createMarketWorker({
   let stopped = false;
   let streamConnected = false;
   let lastMessageAt = null;
-  let oneHourTimer = null;
-  let fourHourTimer = null;
+  let fifteenMinuteTimer = null;
   let refreshInProgress = false;
   let bootstrapController = null;
 
@@ -796,19 +884,16 @@ export function createMarketWorker({
     startedAt = Date.now();
     connect();
     void bootstrap();
-    oneHourTimer = setInterval(() => void refreshTimeframe('1h'), 60 * 60 * 1000);
-    fourHourTimer = setInterval(() => void refreshTimeframe('4h'), 4 * 60 * 60 * 1000);
+    fifteenMinuteTimer = setInterval(() => void refreshTimeframe('15m'), 5 * 60 * 1000);
   }
 
   function stop() {
     stopped = true;
     bootstrapController?.abort();
     if (reconnectTimer) clearTimeout(reconnectTimer);
-    if (oneHourTimer) clearInterval(oneHourTimer);
-    if (fourHourTimer) clearInterval(fourHourTimer);
+    if (fifteenMinuteTimer) clearInterval(fifteenMinuteTimer);
     reconnectTimer = null;
-    oneHourTimer = null;
-    fourHourTimer = null;
+    fifteenMinuteTimer = null;
     const currentSocket = socket;
     socket = null;
     if (currentSocket) {

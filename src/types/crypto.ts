@@ -7,6 +7,7 @@ export type TrapSignalType =
   | 'RETAIL_TRAP_BHEED'
   | 'STOP_LOSS_HUNT_ENTRY'
   | 'FAKE_BREAKOUT'
+  | 'SCALP_OPPORTUNITY'
   | 'NEUTRAL_SCANNING';
 
 export type SignalSeverity = 'CRITICAL' | 'OPPORTUNITY' | 'WARNING' | 'NEUTRAL';
@@ -24,7 +25,7 @@ export interface Candle {
   isClosed: boolean;
 }
 
-export type Timeframe = '1m' | '5m' | '1h' | '4h';
+export type Timeframe = '1m' | '5m' | '15m';
 export type IndicatorDirection = 'BUY' | 'SELL' | 'NEUTRAL';
 export type MacroTrend = 'BULLISH' | 'BEARISH' | 'NEUTRAL';
 export type RetailSentiment = 'EXTREME BULLISH' | 'EXTREME BEARISH' | 'MIXED';

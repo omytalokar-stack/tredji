@@ -46,9 +46,9 @@ TrapDetector AI हा React + TypeScript dashboard आणि Node.js + Express 
 
 1. `src/main.tsx` React app mount करतो आणि `registerSW({ immediate: true })` ने PWA service worker register करतो.
 2. `App.tsx` browser localStorage मधून निवडलेले coins आणि alert preferences वाचतो. सुरुवातीची यादी BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT; एका browser मध्ये जास्तीत जास्त 5 coins निवडता येतात. निवड localStorage मुळे पुढच्या browser visit साठी जतन होते.
-3. निवडलेल्या प्रत्येक coin साठी चार timeframe मधील 100 Binance klines मागवले जातात: `1m`, `5m`, `1h`, `4h`. REST calls अनुक्रमे होतात आणि candle history जास्तीत जास्त 120 नोंदी ठेवते.
+3. निवडलेल्या प्रत्येक coin साठी तीन timeframe मधील 100 Binance klines मागवले जातात: `1m`, `5m`, `15m`. REST calls अनुक्रमे होतात आणि candle history जास्तीत जास्त 120 नोंदी ठेवते.
 4. Binance combined WebSocket मधून selected coins साठी ticker, 1m आणि 5m klines येतात. `!ticker@arr` मधून search modal साठी market tickers मिळतात.
-5. WebSocket update बंद/failed झाल्यास reconnect प्रयत्न होतात. `1h` आणि `4h` REST history ठरावीक मोठ्या interval ने refresh होते.
+5. WebSocket update बंद/failed झाल्यास reconnect प्रयत्न होतात. `15m` REST history ठरावीक interval ने refresh होते.
 6. Frontend backend चा `GET /api/market-status?symbols=...` endpoint दर 5 सेकंदांनी poll करून selected symbols backend worker ला देतो. Backend snapshot उपलब्ध असल्यास त्या symbol चे backend analysis UI मध्ये प्राधान्याने दिसते; browser-side analysis हा fallback आहे.
 7. UI dashboard वर active signal, selected coin, live price, indicator votes, volume ratio, wick, range आणि नियमांचे स्पष्टीकरण दाखवतो.
 
@@ -62,7 +62,7 @@ Frontend मधील मुख्य REST helper public Binance hosts मध्
 - Startup वेळी प्रत्येक symbol साठी चार timeframe चा market history bootstrap करतो.
 - Binance ticker/kline WebSocket update वर in-memory candle, ticker आणि analysis snapshot refresh करतो.
 - `GET /api/market-status` द्वारे हा snapshot frontend ला देतो; response no-cache आहे.
-- `1h` history तासाने आणि `4h` history चार तासांनी refresh करतो.
+- `15m` history स्थिर 15-मिनट interval वर refresh करते.
 - REST वर Binance `418`/`429` rate-limit response आल्यास ठरावीक काळ REST request थांबवतो.
 - Backend market state RAM मध्ये आहे; process restart झाल्यावर market history पुन्हा bootstrap होते.
 
@@ -85,7 +85,7 @@ Analysis साठी प्रत्येक timeframe मध्ये कि�
 
 प्रत्येक indicator साठी BUY/SELL/NEUTRAL mapping code मध्ये स्पष्ट आहे. Sentiment `EXTREME BULLISH` तेव्हाच होते जेव्हा **1m आणि 5m दोन्हीवर स्वतंत्रपणे किमान 7/10 BUY** असतात; `EXTREME BEARISH` साठी दोन्हीवर किमान 7/10 SELL लागतात. इतर वेळी MIXED.
 
-`1h` आणि `4h` मधील closed price विरुद्ध EMA-50 वापरून macro trend ठरतो. दोन्ही bullish असतील तर combined macro BULLISH; दोन्ही bearish असतील तर BEARISH; मतभेद असल्यास NEUTRAL.
+`15m` मधील closed price विरुद्ध EMA-50 वापरून macro trend ठरतो. भाव 15m EMA-50 वर असेल तर macro BULLISH; खाली असेल तर BEARISH; समतोल/near-equal स्थितीत NEUTRAL.
 
 Rule order मध्ये पहिला जुळणारा signal परत होतो:
 
