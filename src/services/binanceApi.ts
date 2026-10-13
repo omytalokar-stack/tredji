@@ -18,6 +18,7 @@ const BINANCE_REST_ENDPOINTS = [
  */
 async function fetchBinanceWithFallback<T>(path: string): Promise<T> {
   let lastError: Error | null = null;
+  let rateLimitError: Error | null = null;
 
   for (const baseUrl of BINANCE_REST_ENDPOINTS) {
     try {
@@ -30,9 +31,10 @@ async function fetchBinanceWithFallback<T>(path: string): Promise<T> {
       if (!response.ok) {
         if (response.status === 418 || response.status === 429) {
           const retryAfter = response.headers.get('Retry-After');
-          throw new Error(
+          rateLimitError = new Error(
             `Binance rate limit response HTTP ${response.status}${retryAfter ? `; retry after ${retryAfter}s` : ''}`
           );
+          throw rateLimitError;
         }
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
@@ -41,14 +43,11 @@ async function fetchBinanceWithFallback<T>(path: string): Promise<T> {
       return data as T;
     } catch (err: any) {
       lastError = err;
-      if (err instanceof Error && err.message.includes('Binance rate limit response')) {
-        throw err;
-      }
       // try next mirror
     }
   }
 
-  throw lastError || new Error('Failed to reach Binance REST API');
+  throw rateLimitError || lastError || new Error('Failed to reach Binance REST API');
 }
 
 /**
