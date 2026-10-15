@@ -199,12 +199,13 @@ export default function App() {
         const registration = await navigator.serviceWorker.ready;
         const subscription = await registration.pushManager.getSubscription();
         if (isCancelled) return;
-        setPushSubscriptionActive(Boolean(subscription));
 
         if (subscription) {
-          if (!isCancelled) {
-            setAlertPreferences((current) => ({ ...current, browserNotifications: true }));
-          }
+          const publicKey = await fetchPushPublicKey();
+          await subscribeForPush(registration, publicKey);
+          if (isCancelled) return;
+          setPushSubscriptionActive(true);
+          setAlertPreferences((current) => ({ ...current, browserNotifications: true }));
         } else if (
           alertPreferences.browserNotifications &&
           typeof Notification !== 'undefined' &&
@@ -217,6 +218,7 @@ export default function App() {
             setAlertPreferences((current) => ({ ...current, browserNotifications: true }));
           }
         } else if (!isCancelled) {
+          setPushSubscriptionActive(false);
           setAlertPreferences((current) => ({ ...current, browserNotifications: false }));
         }
       } catch (error) {
