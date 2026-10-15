@@ -15,7 +15,9 @@ interface BackendMarketStatus {
 interface TopHeaderProps {
   coinCount: number;
   maxCoins: number;
-  onOpenSelectedCoins: () => void;
+  onLogoClick: () => void;
+  logoActionLabel: string;
+  logoIsHome: boolean;
   onOpenSearch: () => void;
   onOpenSettings: () => void;
   onOpenProfile: () => void;
@@ -26,7 +28,9 @@ interface TopHeaderProps {
 export const TopHeader: React.FC<TopHeaderProps> = ({
   coinCount,
   maxCoins,
-  onOpenSelectedCoins,
+  onLogoClick,
+  logoActionLabel,
+  logoIsHome,
   onOpenSearch,
   onOpenSettings,
   onOpenProfile,
@@ -53,7 +57,9 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
         <CuteLogo
           coinCount={coinCount}
           maxCoins={maxCoins}
-          onClick={onOpenSelectedCoins}
+          onClick={onLogoClick}
+          actionLabel={logoActionLabel}
+          isHome={logoIsHome}
         />
 
         {/* Center / Right: Search Box Trigger */}

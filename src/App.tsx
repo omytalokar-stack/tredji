@@ -44,6 +44,13 @@ const DEFAULT_ALERT_PREFERENCES: AlertPreferences = {
   voiceAlerts: false,
   voiceStyle: 'trade',
 };
+type AppRoute = 'radar' | 'profile' | 'order-history';
+
+function routeFromPath(pathname: string): AppRoute {
+  if (pathname === '/profile') return 'profile';
+  if (pathname === '/order-history') return 'order-history';
+  return 'radar';
+}
 
 function readAlertPreferences(): AlertPreferences {
   try {
@@ -83,11 +90,8 @@ function mergeCandles(existing: Candle[], incoming: Candle[]): Candle[] {
 }
 
 export default function App() {
-  const [appRoute, setAppRoute] = useState<'radar' | 'profile' | 'order-history'>(() => {
-    if (window.location.pathname === '/profile') return 'profile';
-    if (window.location.pathname === '/order-history') return 'order-history';
-    return 'radar';
-  });
+  const [appRoute, setAppRoute] = useState<AppRoute>(() => routeFromPath(window.location.pathname));
+  const routeHistory = useRef<AppRoute[]>([]);
   const [tradeDraft, setTradeDraft] = useState<TrapAnalysis | null>(null);
   const [tradeEntryPrice, setTradeEntryPrice] = useState<number | null>(null);
   const [tradeAlert, setTradeAlert] = useState<TrapAnalysis | null>(null);
@@ -99,22 +103,24 @@ export default function App() {
     [paperTrading.trades]
   );
 
-  const navigateTo = useCallback((route: 'radar' | 'profile' | 'order-history') => {
+  const navigateTo = useCallback((route: AppRoute) => {
     const path = route === 'radar' ? '/' : `/${route}`;
-    if (window.location.pathname !== path) window.history.pushState({}, '', path);
+    if (route !== appRoute) {
+      routeHistory.current.push(appRoute);
+      if (window.location.pathname !== path) {
+        window.history.pushState({ trapDetectorRoute: route }, '', path);
+      }
+    }
     setAppRoute(route);
     window.scrollTo({ top: 0, behavior: 'smooth' });
-  }, []);
+  }, [appRoute]);
 
   useEffect(() => {
     const onPopState = () => {
-      setAppRoute(
-        window.location.pathname === '/order-history'
-          ? 'order-history'
-          : window.location.pathname === '/profile'
-            ? 'profile'
-            : 'radar'
-      );
+      const route = routeFromPath(window.location.pathname);
+      if (routeHistory.current.at(-1) === route) routeHistory.current.pop();
+      else routeHistory.current = [];
+      setAppRoute(route);
     };
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
@@ -1037,7 +1043,21 @@ export default function App() {
       <TopHeader
         coinCount={selectedCoins.length}
         maxCoins={MAX_COINS}
-        onOpenSelectedCoins={() => setIsSelectedCoinsOpen(true)}
+        onLogoClick={() => {
+          if (appRoute === 'radar') {
+            setIsSelectedCoinsOpen(true);
+          } else if (routeHistory.current.length > 0) {
+            window.history.back();
+          } else {
+            navigateTo('radar');
+          }
+        }}
+        logoActionLabel={appRoute === 'radar'
+          ? 'View Selected Coins'
+          : routeHistory.current.length > 0
+            ? 'Go back'
+            : 'Go to Trap Radar home'}
+        logoIsHome={appRoute === 'radar'}
         onOpenSearch={() => setIsSearchOpen(true)}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenProfile={() => navigateTo('profile')}

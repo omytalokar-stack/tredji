@@ -1,6 +1,6 @@
 /**
  * Top Left Cute Mascot Logo
- * Clicking it reveals the current "Selected Coins" (max 5 coins limit)
+ * Its action changes between the home screen's selected-coins drawer and navigation.
  */
 import React from 'react';
 
@@ -8,16 +8,24 @@ interface CuteLogoProps {
   coinCount: number;
   maxCoins: number;
   onClick: () => void;
+  actionLabel: string;
+  isHome: boolean;
 }
 
-export const CuteLogo: React.FC<CuteLogoProps> = ({ coinCount, maxCoins, onClick }) => {
+export const CuteLogo: React.FC<CuteLogoProps> = ({
+  coinCount,
+  maxCoins,
+  onClick,
+  actionLabel,
+  isHome,
+}) => {
   return (
     <button
       onClick={onClick}
       type="button"
       className="group flex items-center gap-1.5 sm:gap-2.5 px-1 sm:px-2 py-1.5 rounded-xl hover:bg-slate-850/80 active:scale-95 transition-all duration-300 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500 min-h-[44px] cursor-pointer"
-      title="Click to view & manage your 5 Selected Coins"
-      aria-label="View Selected Coins"
+      title={actionLabel}
+      aria-label={actionLabel}
     >
       {/* Cute Mascot Icon */}
       <div className="relative w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-gradient-to-tr from-rose-600 via-rose-500 to-amber-400 p-[1.5px] shadow-md shadow-rose-950/40 group-hover:shadow-rose-900/60 transition-shadow duration-300">
@@ -66,7 +74,9 @@ export const CuteLogo: React.FC<CuteLogoProps> = ({ coinCount, maxCoins, onClick
         <div className="flex items-center gap-1 mt-1 text-[10px] sm:text-[11px] text-slate-400 font-mono">
           <span className="text-slate-300 font-semibold">{coinCount}/{maxCoins}</span>
           <span>coins tracked</span>
-          <span className="text-rose-400 group-hover:translate-x-0.5 transition-transform text-[10px]">▼</span>
+          <span className="text-rose-400 group-hover:translate-x-0.5 transition-transform text-[10px]">
+            {isHome ? '▼' : '←'}
+          </span>
         </div>
       </div>
     </button>
